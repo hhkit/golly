@@ -2,7 +2,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
-
+#include <isl/cpp.h>
 #include <iostream>
 namespace golly {
 char PscopDetection::ID = 0;

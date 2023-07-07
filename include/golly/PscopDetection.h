@@ -1,5 +1,5 @@
-#ifndef GOLLY_PSCOPDETECTION
-#define GOLLY_PSCOPDETECTION
+#ifndef GOLLY_PSCOPDETECTION_H
+#define GOLLY_PSCOPDETECTION_H
 
 #include <llvm/IR/PassManager.h>
 #include <llvm/Pass.h>
@@ -20,4 +20,4 @@ private:
 };
 } // namespace golly
 
-#endif /* VOLT_INCLUDE_GOLLY_PSCOPDETECTION */
+#endif /* GOLLY_PSCOPDETECTION_H */
