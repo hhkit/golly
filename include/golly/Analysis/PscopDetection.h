@@ -1,5 +1,5 @@
-#ifndef GOLLY_DIMENSIONDETECTION_H
-#define GOLLY_DIMENSIONDETECTION_H
+#ifndef GOLLY_ANALYSIS_PSCOPDETECTION_H
+#define GOLLY_ANALYSIS_PSCOPDETECTION_H
 
 #include <llvm/IR/PassManager.h>
 #include <llvm/Pass.h>
@@ -12,7 +12,7 @@ using llvm::FunctionPass;
 using llvm::PassInfoMixin;
 using llvm::PreservedAnalyses;
 
-class DimensionDetection : public PassInfoMixin<DimensionDetection> {
+class PscopDetection : public PassInfoMixin<PscopDetection> {
 public:
   static char ID;
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
@@ -21,4 +21,4 @@ private:
 };
 } // namespace golly
 
-#endif /* GOLLY_DIMENSIONDETECTION_H */
+#endif /* GOLLY_ANALYSIS_PSCOPDETECTION_H */

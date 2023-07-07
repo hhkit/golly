@@ -1,4 +1,4 @@
-#include <golly/DimensionDetection.h>
+#include <golly/Analysis/DimensionDetection.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/IR/InstVisitor.h>
 

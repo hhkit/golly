@@ -1,8 +1,8 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
 
-#include <golly/DimensionDetection.h>
-#include <golly/PscopDetection.h>
+#include <golly/Analysis/DimensionDetection.h>
+#include <golly/Analysis/PscopDetection.h>
 
 llvm::PassPluginLibraryInfo getGollyPluginInfo() {
   using llvm::ArrayRef;

@@ -1,4 +1,4 @@
-#include <golly/PscopDetection.h>
+#include <golly/Analysis/PscopDetection.h>
 #include <iostream>
 #include <isl/cpp.h>
 #include <llvm/IR/Function.h>
