@@ -14,7 +14,6 @@ using llvm::PreservedAnalyses;
 
 class DimensionDetection : public PassInfoMixin<DimensionDetection> {
 public:
-  static char ID;
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 
 private:

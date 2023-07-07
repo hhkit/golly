@@ -3,8 +3,6 @@
 #include <isl/cpp.h>
 #include <llvm/IR/Function.h>
 namespace golly {
-char PscopDetection::ID = 0;
-
 PreservedAnalyses PscopDetection::run(Function &f,
                                       FunctionAnalysisManager &am) {
 

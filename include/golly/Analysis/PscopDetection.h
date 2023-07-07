@@ -14,7 +14,6 @@ using llvm::PreservedAnalyses;
 
 class PscopDetection : public PassInfoMixin<PscopDetection> {
 public:
-  static char ID;
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 
 private:
