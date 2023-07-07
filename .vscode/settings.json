@@ -1,5 +1,8 @@
 {
-    "files.associations": {
-        "iostream": "cpp"
-    }
+  "files.associations": {
+    "iostream": "cpp"
+  },
+  "C/C++ Include Guard.Macro Type": "Filepath",
+  "C/C++ Include Guard.Suffix": "_H",
+  "C/C++ Include Guard.Path Skip": 1,
 }
