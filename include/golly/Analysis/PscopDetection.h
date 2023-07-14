@@ -3,6 +3,9 @@
 
 #include <llvm/IR/PassManager.h>
 #include <llvm/Pass.h>
+namespace llvm {
+class RegionInfo;
+}
 
 namespace golly {
 
@@ -11,12 +14,14 @@ using llvm::FunctionAnalysisManager;
 using llvm::FunctionPass;
 using llvm::PassInfoMixin;
 using llvm::PreservedAnalyses;
+using llvm::RegionInfo;
 
-class PscopDetection : public PassInfoMixin<PscopDetection> {
+class PscopDetectionPass : public PassInfoMixin<PscopDetectionPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 
 private:
+  RegionInfo *RI{};
 };
 } // namespace golly
 

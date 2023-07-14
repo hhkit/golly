@@ -1,18 +1,53 @@
+#include <golly/Analysis/DimensionDetection.h>
 #include <golly/Analysis/PscopDetection.h>
 #include <iostream>
 #include <isl/cpp.h>
+#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/RegionInfo.h>
 #include <llvm/IR/Function.h>
+
 namespace golly {
-PreservedAnalyses PscopDetection::run(Function &f,
-                                      FunctionAnalysisManager &am) {
+using llvm::LoopAnalysis;
+using llvm::LoopInfo;
+using llvm::Region;
+using llvm::RegionInfo;
+using llvm::RegionInfoAnalysis;
 
-  std::cerr << "analysis: " << f.getName().str() << std::endl;
+struct PscopDetection {
+  DetectedIntrinsics &dimensions;
+  LoopInfo &loop_info;
+  RegionInfo &region_info;
 
-  // verify the function is
-  // verify the grid of the function
+  PscopDetection(DetectedIntrinsics &dims, LoopInfo &l, RegionInfo &r)
+      : dimensions{dims}, loop_info{l}, region_info{r} {}
 
-  if (f.isIntrinsic())
-    llvm::errs() << f.getName() << " is intrinsic\n";
+  void run() {
+    // verify the function is
+    // verify the grid of the function
+
+    findPscops(*region_info.getTopLevelRegion());
+  }
+
+  void findPscops(llvm::Region &r) {
+    for (auto &subregion : r) {
+      // two kinds of regions: branches and loops
+      // if branch, instantiate constraint
+
+      // if loop,
+      // ensure affine branch
+      // instantiate set with constraint
+    }
+  }
+};
+
+PreservedAnalyses PscopDetectionPass::run(Function &f,
+                                          FunctionAnalysisManager &am) {
+  PscopDetection pscops{am.getResult<DimensionDetection>(f),
+                        am.getResult<LoopAnalysis>(f),
+                        am.getResult<RegionInfoAnalysis>(f)};
+
+  pscops.run();
+
   return PreservedAnalyses::all();
 }
 } // namespace golly

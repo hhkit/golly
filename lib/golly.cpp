@@ -1,3 +1,4 @@
+#include <llvm/Analysis/RegionInfo.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
 
@@ -10,12 +11,17 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
   using llvm::StringRef;
   return {LLVM_PLUGIN_API_VERSION, "golly", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
+            PB.registerAnalysisRegistrationCallback(
+                [](llvm::FunctionAnalysisManager &fam) {
+                  fam.registerPass(
+                      []() { return golly::DimensionDetection(); });
+                });
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, llvm::FunctionPassManager &PM,
                    ArrayRef<llvm::PassBuilder::PipelineElement>) {
                   if (Name == "golly") {
-                    PM.addPass(golly::DimensionDetection());
-                    PM.addPass(golly::PscopDetection());
+                    (golly::DimensionDetection());
+                    PM.addPass(golly::PscopDetectionPass());
                     return true;
                   }
                   return false;
