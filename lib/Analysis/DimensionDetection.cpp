@@ -4,19 +4,21 @@
 
 namespace golly {
 
-const static llvm::StringMap<bool(DetectedIntrinsics::*)> intrinsicLut{
-    {"llvm.nvvm.read.ptx.sreg.tid.x", &DetectedIntrinsics::tidX},
-    {"llvm.nvvm.read.ptx.sreg.tid.y", &DetectedIntrinsics::tidY},
-    {"llvm.nvvm.read.ptx.sreg.tid.z", &DetectedIntrinsics::tidZ},
-    {"llvm.nvvm.read.ptx.sreg.ntid.x", &DetectedIntrinsics::ntidX},
-    {"llvm.nvvm.read.ptx.sreg.ntid.y", &DetectedIntrinsics::ntidY},
-    {"llvm.nvvm.read.ptx.sreg.ntid.z", &DetectedIntrinsics::ntidZ},
-    {"llvm.nvvm.read.ptx.sreg.ctaid.x", &DetectedIntrinsics::ctaX},
-    {"llvm.nvvm.read.ptx.sreg.ctaid.y", &DetectedIntrinsics::ctaY},
-    {"llvm.nvvm.read.ptx.sreg.ctaid.z", &DetectedIntrinsics::ctaZ},
-    {"llvm.nvvm.read.ptx.sreg.nctaid.x", &DetectedIntrinsics::nctaX},
-    {"llvm.nvvm.read.ptx.sreg.nctaid.y", &DetectedIntrinsics::nctaY},
-    {"llvm.nvvm.read.ptx.sreg.nctaid.z", &DetectedIntrinsics::nctaZ},
+using llvm::StringMap;
+
+const static StringMap<Intrinsic> intrinsicLut{
+    {"llvm.nvvm.read.ptx.sreg.tid.x", Intrinsic::tidX},
+    {"llvm.nvvm.read.ptx.sreg.tid.y", Intrinsic::tidY},
+    {"llvm.nvvm.read.ptx.sreg.tid.z", Intrinsic::tidZ},
+    {"llvm.nvvm.read.ptx.sreg.ntid.x", Intrinsic::nTidX},
+    {"llvm.nvvm.read.ptx.sreg.ntid.y", Intrinsic::nTidY},
+    {"llvm.nvvm.read.ptx.sreg.ntid.z", Intrinsic::nTidZ},
+    {"llvm.nvvm.read.ptx.sreg.ctaid.x", Intrinsic::ctaX},
+    {"llvm.nvvm.read.ptx.sreg.ctaid.y", Intrinsic::ctaY},
+    {"llvm.nvvm.read.ptx.sreg.ctaid.z", Intrinsic::ctaZ},
+    {"llvm.nvvm.read.ptx.sreg.nctaid.x", Intrinsic::nCtaX},
+    {"llvm.nvvm.read.ptx.sreg.nctaid.y", Intrinsic::nCtaY},
+    {"llvm.nvvm.read.ptx.sreg.nctaid.z", Intrinsic::nCtaZ},
 };
 
 struct IntrinsicFinder : llvm::InstVisitor<IntrinsicFinder> {
@@ -26,8 +28,7 @@ struct IntrinsicFinder : llvm::InstVisitor<IntrinsicFinder> {
     if (const auto fn = call.getCalledFunction()) {
       if (const auto itr = intrinsicLut.find(fn->getName());
           itr != intrinsicLut.end()) {
-        const auto flag = itr->second;
-        detectedIntrinsics.*flag = true;
+        detectedIntrinsics.detections.try_emplace(&call, itr->second);
       }
     }
   }
