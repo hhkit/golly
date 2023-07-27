@@ -33,7 +33,6 @@ public:
 class RunPscopDetection : public PassInfoMixin<RunPscopDetection> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  ;
 };
 } // namespace golly
 

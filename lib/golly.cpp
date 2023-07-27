@@ -20,24 +20,10 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
             });
 
         PB.registerPipelineParsingCallback(
-            [](StringRef Name, llvm::LoopPassManager &lpm,
-               ArrayRef<llvm::PassBuilder::PipelineElement>) -> bool {
-              if (Name == "golly-canonicalize") {
-                lpm.addPass(llvm::LoopRotatePass());
-                return true;
-              }
-              return false;
-            });
-
-        PB.registerPipelineParsingCallback(
             [](StringRef Name, llvm::FunctionPassManager &PM,
                ArrayRef<llvm::PassBuilder::PipelineElement>) {
-              if (Name == "golly-canonicalize") {
-                PM.addPass(llvm::PromotePass());
-                return true;
-              }
               if (Name == "golly") {
-                // PM.addPass(golly::PscopDetectionPass());
+                PM.addPass(golly::RunPscopDetection());
                 return true;
               }
               return false;
