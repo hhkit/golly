@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <golly/Analysis/DimensionDetection.h>
 #include <golly/Analysis/PscopDetection.h>
-#include <golly/Support/SCEVValidator.h>
 #include <iostream>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SetVector.h>
@@ -10,7 +9,6 @@
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
 #include <llvm/IR/Function.h>
-// #include <polly/Support/SCEVValidator.h>
 
 namespace golly {
 using llvm::ArrayRef;
@@ -388,7 +386,7 @@ struct PscopDetection {
           // polly::SCEVValidator validator{r, nullptr, scalar_evolution,
           // nullptr}; auto res = validator.visit(scev);
 
-          ScevValidator validator{scalar_evolution};
+          ScevValidator validator{scalar_evolution, r, nullptr};
           auto res = validator.visit(scev);
           llvm::dbgs() << instr << " is " << (!res ? "not" : "")
                        << " affine!\n";
