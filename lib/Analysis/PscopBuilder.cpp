@@ -72,17 +72,15 @@ public:
 
   void build(Function &f) {
     // detect distribution domain of function
-    auto distribution_domain = isl_set_read_from_str(
-        islpp::ctx(), "{[tid]       | 0 <= 2 * tid <= 255 and 32 <= tid}");
+    // auto distribution_domain = islpp::set("{[tid]       | 0 <= 2 * tid <= 255
+    // and 32 <= tid}");
+    auto dom1 = islpp::union_set("{ B[0]; A[2,8,1] }");
+    auto dom2 = islpp::union_set(" { A[2]}");
+    // auto dom2 = islpp::set("{  B[0]; A[2,8,1] }");
 
-    isl_printer *P = isl_printer_to_str(islpp::ctx());
-    P = isl_printer_set_output_format(P, ISL_FORMAT_ISL);
-    P = isl_printer_print_set(P, distribution_domain);
-    auto str = isl_printer_get_str(P);
-    P = isl_printer_flush(P);
-    llvm::dbgs() << "isl: " << str << "\n";
-    free(str);
-    isl_printer_free(P);
+    auto ss = islpp::osstream{};
+    ss << (dom1 * dom2);
+    llvm::dbgs() << "isl: " << ss.str() << "\n";
 
     // iterate over bbs of function in BFS
     const auto first = &f.getEntryBlock();
