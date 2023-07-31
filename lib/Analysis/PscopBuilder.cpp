@@ -75,17 +75,19 @@ public:
     // auto distribution_domain = islpp::set("{[tid]       | 0 <= 2 * tid <= 255
     // and 32 <= tid}");
     auto dom1 = islpp::union_set("{ B[0]; A[2,8,1] }");
-    auto dom2 = islpp::union_set(" { A[2]}");
+    auto dom2 = islpp::union_set(" { A[2, 8, 1]}");
+    auto dom3 = dom1 - dom2;
     // auto dom2 = islpp::set("{  B[0]; A[2,8,1] }");
 
     auto ss = islpp::osstream{};
-    ss << (dom1 * dom2);
+    ss << dom1;
     llvm::dbgs() << "isl: " << ss.str() << "\n";
 
     // iterate over bbs of function in BFS
     const auto first = &f.getEntryBlock();
     std::queue<llvm::BasicBlock *> queue;
     queue.emplace(first);
+
     llvm::DenseSet<llvm::BasicBlock *> visited{first};
 
     while (!queue.empty()) {

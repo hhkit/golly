@@ -34,16 +34,6 @@ string osstream::str() {
   return retval;
 }
 
-ostream &ostream::operator<<(const space &val) {
-  apply<isl_printer_print_space>(val.get());
-  return *this;
-}
-
-ostream &ostream::operator<<(const union_set &val) {
-  apply<isl_printer_print_union_set>(val.get());
-  return *this;
-}
-
 space::space(const space_config &names)
     : base{([&]() -> base {
         auto sp = isl_space_alloc(ctx(), names.params.size(), names.in.size(),

@@ -35,7 +35,16 @@ public:
   using base = wrap;
 
   wrap(IslTy *ptr) : internal{ptr, Deleter} {}
+  // ~wrap() {
+  //   if (deleteMe) {
+  //     Deleter()
+  //   }
+  // };
   using internal::get;
+
+  // private:
+  //   IslTy* ptr;
+  //   bool deleteMe = true;
 };
 
 template <typename IslTy, auto Copier, auto Deleter>
@@ -57,34 +66,13 @@ public:
 };
 
 } // namespace detail
+
 class isl_manager : public detail::wrap<isl_ctx, isl_ctx_free> {
 public:
   isl_manager();
 };
 
 isl_ctx *ctx();
-
-class ostream : public detail::wrap<isl_printer, isl_printer_free> {
-public:
-  ostream &operator<<(const space &space);
-  ostream &operator<<(const union_set &val);
-
-protected:
-  using base::base;
-  template <auto Fn, typename... Args> void apply(Args &&...args) {
-    auto next = Fn(internal::release(), args...);
-    internal::operator=(internal{next, get_deleter()});
-  }
-};
-
-class osstream : public ostream {
-public:
-  osstream();
-  ~osstream() noexcept;
-
-  void flush();
-  string str();
-};
 
 struct space_config {
   vector<string> set;
@@ -124,6 +112,35 @@ class val : public detail::wrap<isl_val, isl_val_copy, isl_val_free> {
   explicit val(consts);
   explicit val(long i);
   explicit val(unsigned long i);
+};
+
+#define PRINT_FAST(TYPE, FN)                                                   \
+  ostream &operator<<(const TYPE &val) {                                       \
+    apply<FN>(val.get());                                                      \
+    return *this;                                                              \
+  };
+
+class ostream : public detail::wrap<isl_printer, isl_printer_free> {
+public:
+  PRINT_FAST(space, isl_printer_print_space);
+  PRINT_FAST(union_set, isl_printer_print_union_set);
+
+protected:
+  using base::base;
+  template <auto Fn, typename... Args> void apply(Args &&...args) {
+    auto next = Fn(internal::release(), args...);
+    internal::operator=(internal{next, get_deleter()});
+  }
+};
+#undef PRINT_FAST
+
+class osstream : public ostream {
+public:
+  osstream();
+  ~osstream() noexcept;
+
+  void flush();
+  string str();
 };
 } // namespace islpp
 
