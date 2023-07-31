@@ -1,5 +1,8 @@
 #ifndef GOLLY_SUPPORT_ISL_H
 #define GOLLY_SUPPORT_ISL_H
+// a subset of isl wrapped up for me to use without killing myself
+
+#include <isl/aff.h>
 #include <isl/ctx.h>
 #include <isl/map.h>
 #include <isl/point.h>
@@ -20,14 +23,8 @@ using std::string_view;
 using std::vector;
 using boolean = isl_bool;
 
-class space;
-class union_set;
-class val;
-class union_map;
-
 namespace detail {
 template <typename IslTy, auto... Fns> class wrap;
-
 template <typename IslTy, auto Deleter> class wrap<IslTy, Deleter> {
 public:
   using base = wrap;
@@ -90,11 +87,6 @@ struct space_config {
   vector<string> params;
   vector<string> in;
   vector<string> out;
-};
-
-class space : public detail::wrap<isl_space, isl_space_free> {
-public:
-  explicit space(const space_config &cfg);
 };
 
 #define UN_PROP(TYPE, OP, FUNC)                                                \
@@ -265,21 +257,94 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
       &fn);
 }
 
-#define PRINT_FAST(TYPE)                                                       \
-  ostream &operator<<(const TYPE &val) {                                       \
-    apply<isl_printer_print_##TYPE>(val.get());                                \
+#define EXPRESSION(ID)                                                         \
+  class ID : public detail::wrap<isl_##ID, isl_##ID##_copy, isl_##ID##_free> { \
+  public:                                                                      \
+    using base::base;                                                          \
+    ID(string_view isl) : base{isl_##ID##_read_from_str(ctx(), isl.data())} {} \
+  };                                                                           \
+  CLOSED_BINOP(ID, operator+, isl_##ID##_add)
+
+#define PW_EXPR(ID) CLOSED_BINOP(ID, union_add, isl_##ID##_union_add)
+#define TUPLE_EXPR(ID) CLOSED_BINOP(ID, product, isl_##ID##_product)
+
+#define MULTI_EXPR(ID)                                                         \
+  CLOSED_BINOP(ID, flat_range_product, isl_##ID##_flat_range_product)          \
+  CLOSED_BINOP(ID, range_product, isl_##ID##_range_product)
+
+#define PULLBACK(FROM, TO)                                                     \
+  OPEN_BINOP(FROM, FROM, TO, pullback, isl_##FROM##_pullback_##TO)
+
+// okay who designed this?
+EXPRESSION(aff);
+EXPRESSION(multi_aff);
+EXPRESSION(pw_aff);
+EXPRESSION(pw_multi_aff);
+EXPRESSION(multi_pw_aff);
+EXPRESSION(union_pw_aff);
+EXPRESSION(union_pw_multi_aff);
+EXPRESSION(multi_union_pw_aff);
+
+PW_EXPR(pw_aff);
+PW_EXPR(pw_multi_aff);
+PW_EXPR(multi_pw_aff);
+PW_EXPR(union_pw_multi_aff);
+PW_EXPR(union_pw_aff);
+PW_EXPR(multi_union_pw_aff);
+
+MULTI_EXPR(multi_aff);
+MULTI_EXPR(pw_multi_aff);
+MULTI_EXPR(multi_pw_aff);
+MULTI_EXPR(union_pw_multi_aff);
+MULTI_EXPR(multi_union_pw_aff);
+
+TUPLE_EXPR(multi_aff);
+TUPLE_EXPR(pw_multi_aff);
+TUPLE_EXPR(multi_pw_aff);
+
+// pullbacks
+PULLBACK(aff, aff);
+PULLBACK(aff, multi_aff);
+
+PULLBACK(pw_aff, multi_aff);
+PULLBACK(pw_aff, pw_multi_aff);
+PULLBACK(pw_aff, multi_pw_aff);
+
+PULLBACK(multi_aff, multi_aff);
+
+PULLBACK(pw_multi_aff, multi_aff);
+PULLBACK(pw_multi_aff, pw_multi_aff);
+
+PULLBACK(multi_pw_aff, multi_aff);
+PULLBACK(multi_pw_aff, pw_multi_aff);
+PULLBACK(multi_pw_aff, multi_pw_aff);
+
+PULLBACK(union_pw_aff, union_pw_multi_aff);
+
+PULLBACK(union_pw_multi_aff, union_pw_multi_aff);
+PULLBACK(multi_union_pw_aff, union_pw_multi_aff);
+
+#define PRINT_DEF(TYPE)                                                        \
+  ostream &operator<<(const TYPE &v) {                                         \
+    apply<isl_printer_print_##TYPE>(v.get());                                  \
     return *this;                                                              \
   };
 
 class ostream : public detail::wrap<isl_printer, isl_printer_free> {
-
 public:
-  PRINT_FAST(space);
-  PRINT_FAST(union_set);
-  PRINT_FAST(union_map);
-  PRINT_FAST(set);
-  PRINT_FAST(map);
-  PRINT_FAST(val);
+  PRINT_DEF(union_set)
+  PRINT_DEF(union_map)
+  PRINT_DEF(set)
+  PRINT_DEF(map)
+  PRINT_DEF(val)
+  PRINT_DEF(point)
+  PRINT_DEF(aff)
+  PRINT_DEF(pw_aff)
+  PRINT_DEF(multi_aff)
+  PRINT_DEF(pw_multi_aff)
+  PRINT_DEF(multi_pw_aff)
+  PRINT_DEF(union_pw_multi_aff)
+  PRINT_DEF(multi_union_pw_aff)
 
 protected:
   using base::base;
@@ -288,7 +353,18 @@ protected:
     base::operator=(base{next});
   }
 };
-#undef PRINT_FAST
+
+#undef UN_PROP
+#undef BIN_PROP
+#undef OPEN_UNOP
+#undef OPEN_BINOP
+#undef CLOSED_UNOP
+#undef CLOSED_BINOP
+#undef REV_BINOP
+#undef SET_OPERATORS
+#undef LEXICAL_OPERATORS
+#undef SAMPLE
+#undef PRINT_DEF
 
 class osstream : public ostream {
 public:

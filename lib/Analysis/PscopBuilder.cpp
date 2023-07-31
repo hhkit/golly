@@ -73,8 +73,7 @@ public:
   void build(Function &f) {
     using namespace islpp;
     // detect distribution domain of function
-    // auto distribution_domain = islpp::set("{[tid]       | 0 <= 2 * tid <= 255
-    // and 32 <= tid}");
+    auto distribution_domain = islpp::set("{[tid]| 0 <= tid <= 255}");
     auto test = union_set(" { A[tid] | 0 <= tid <= 255}");
     auto test2 = union_set(" { B[tid] | 0 <= tid <= 255}");
     auto test3 = test + test2;
