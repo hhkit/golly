@@ -1,4 +1,5 @@
 #include <golly/Analysis/DimensionDetection.h>
+#include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/PscopDetection.h>
 #include <golly/Analysis/SyncBlockDetection.h>
 #include <llvm/Analysis/RegionInfo.h>
@@ -20,6 +21,7 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
               fam.registerPass([]() { return golly::PscopDetectionPass(); });
               fam.registerPass(
                   []() { return golly::SyncBlockDetectionPass(); });
+              fam.registerPass([]() { return golly::PscopBuilderPass(); });
             });
 
         PB.registerPipelineParsingCallback(

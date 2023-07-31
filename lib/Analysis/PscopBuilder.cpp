@@ -1,16 +1,26 @@
 #include <golly/Analysis/PscopBuilder.h>
+#include <golly/Support/isl.h>
 #include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/Optional.h>
 #include <llvm/ADT/PriorityQueue.h>
 #include <llvm/ADT/StringSet.h>
+#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/RegionInfo.h>
+#include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/IR/Instructions.h>
 #include <queue>
 
 namespace golly {
+using llvm::LoopInfo;
+using llvm::Optional;
+using llvm::RegionInfo;
+using llvm::ScalarEvolution;
+
+using InductionVarSet = llvm::DenseSet<const llvm::Value *>;
 
 namespace detail {
 bool isInductionVariable(
-    const llvm::Instruction *checkme,
-    const llvm::DenseSet<const llvm::Instruction *> &iteration_vars,
+    const llvm::Value *checkme, const InductionVarSet &iteration_vars,
     const llvm::StringSet</*nani???*/> &distribution_vars) {
   if (iteration_vars.contains(checkme))
     return true;
@@ -22,41 +32,113 @@ bool isInductionVariable(
 
   return false;
 }
+
 } // namespace detail
+
+struct QuasiaffineForm {};
 
 class PscopBuilder {
 public:
-  void build(const Function &f) {
-    // detect allocation domain of function
+  struct RegionInvariants {
+    isl_set *iteration_domain;
+    InductionVarSet induction_variables;
+  };
+
+  PscopBuilder(RegionInfo &ri, LoopInfo &li, ScalarEvolution &se)
+      : region_info{ri}, loop_info{li}, scalar_evo{se} {}
+
+  const RegionInvariants *get_parent_domain(const Region *reg) {
+    if (reg == nullptr)
+      return {};
+
+    // assert((iteration_domain.find(reg) != iteration_domain.end()) &&
+    //        "parent should already have been visited");
+    return &iteration_domain[reg];
+  }
+
+  Optional<QuasiaffineForm> getQuasiaffineForm(const llvm::Value &val,
+                                               RegionInvariants &invariants) {
+    *val.getValueName();
+    return {};
+  }
+
+  // returns the quasiaffine form of the constraint if the bb is the result of
+  // an if comparison note: negate the constraint if it is the else path!
+  Optional<QuasiaffineForm>
+  getQuasiaffineConstraint(const llvm::BasicBlock *bb,
+                           RegionInvariants &invariants) {
+    return {};
+  }
+
+  void build(Function &f) {
+    // detect distribution domain of function
+    auto distribution_domain = isl_set_read_from_str(
+        islpp::ctx(), "{[tid]       | 0 <= 2 * tid <= 255 and 32 <= tid}");
+
+    isl_printer *P = isl_printer_to_str(islpp::ctx());
+    P = isl_printer_set_output_format(P, ISL_FORMAT_ISL);
+    P = isl_printer_print_set(P, distribution_domain);
+    auto str = isl_printer_get_str(P);
+    P = isl_printer_flush(P);
+    llvm::dbgs() << "isl: " << str << "\n";
+    free(str);
+    isl_printer_free(P);
 
     // iterate over bbs of function in BFS
     const auto first = &f.getEntryBlock();
-    std::queue<const llvm::BasicBlock *> queue;
+    std::queue<llvm::BasicBlock *> queue;
     queue.emplace(first);
-    llvm::DenseSet<const llvm::BasicBlock *> visited{first};
+    llvm::DenseSet<llvm::BasicBlock *> visited{first};
 
     while (!queue.empty()) {
       const auto visit = queue.front();
       queue.pop();
-      // extract iteration domain from enclosing region
+      // retrieve iteration domain from enclosing region
       // note:
       // by induction, we will have subsequent enclosing regions'
       // iteration domains as well
+      const auto visit_region = region_info.getRegionFor(visit);
+      auto parent_invariants = get_parent_domain(visit_region->getParent());
 
-      // check our region's constraints
-      // are we a loop?
-      // if so, add the iteration variable into our iteration domain
+      // has this region been analyzed yet?
+      // note: regions only need to be visited once
+      // but because WARs and RARs may occur after deeper regions
+      // we still need to visit the basic blocks in sequence to generate a
+      // lexicographically correct timing
+      if (iteration_domain.find(visit_region) != iteration_domain.end()) {
+        auto indvars =
+            parent_invariants ? *parent_invariants : RegionInvariants{};
+        // check our region's constraints
+        // are we a loop?
+        if (const auto visit_loop =
+                loop_info.getLoopFor(visit_region->getEntry())) {
+          // are our constraints affine?
+          const auto bounds = visit_loop->getBounds(scalar_evo);
+          const auto &init = bounds->getInitialIVValue();
+          const auto &fin = bounds->getFinalIVValue();
 
-      // are we a result of a branch?
-      // if so, add the constraint into our set
+          // if so, add the iteration variable into our iteration domain
+          const auto loopVar = visit_loop->getCanonicalInductionVariable();
+          indvars.induction_variables.insert(loopVar);
+        }
 
-      // induction variables are a union of allocation vars and iteration vars
+        // are we a result of a branch?
+        // if so, check if the constraint is affine
 
-      // now we generate our access relations
+        indvars.iteration_domain;
+
+        // then, add the constraint into our set
+
+        iteration_domain[visit_region] =
+            std::move(indvars); // pray for copy ellision
+      }
+
+      // now we generate our access relations, visiting all loads and stores,
+      // separated by sync block
 
       // then we enqueue our children if they are not yet enqueued
-
       for (auto &&elem : llvm::successors(visit)) {
+        const auto reg = region_info.getRegionFor(elem);
         if (visited.contains(elem))
           continue;
 
@@ -67,6 +149,20 @@ public:
   }
 
 private:
-  DenseMap<const Region *, unique_ptr<isl::set>> iteration_domain;
+  DenseMap<const Region *, RegionInvariants> iteration_domain;
+  RegionInfo &region_info;
+  LoopInfo &loop_info;
+  ScalarEvolution &scalar_evo;
 };
+
+AnalysisKey PscopBuilderPass::Key;
+
+PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
+                                               FunctionAnalysisManager &fam) {
+  PscopBuilder builder{fam.getResult<llvm::RegionInfoAnalysis>(f),
+                       fam.getResult<llvm::LoopAnalysis>(f),
+                       fam.getResult<llvm::ScalarEvolutionAnalysis>(f)};
+  builder.build(f);
+  return {};
+}
 } // namespace golly

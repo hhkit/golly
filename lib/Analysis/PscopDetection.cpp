@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <golly/Analysis/DimensionDetection.h>
+#include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/PscopDetection.h>
 #include <golly/Analysis/SyncBlockDetection.h>
 #include <iostream>
@@ -471,7 +472,8 @@ PscopDetectionPass::run(Function &f, FunctionAnalysisManager &am) {
 PreservedAnalyses RunPscopDetection::run(Function &f,
                                          FunctionAnalysisManager &am) {
   // am.getResult<PscopDetectionPass>(f);
-  am.getResult<SyncBlockDetectionPass>(f).dump(llvm::dbgs());
+  // am.getResult<SyncBlockDetectionPass>(f).dump(llvm::dbgs());
+  am.getResult<PscopBuilderPass>(f);
   return PreservedAnalyses::all();
 }
 

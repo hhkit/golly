@@ -1,1 +1,1 @@
-__global__ void simple(int *val, int N) { val[threadIdx.x * threadIdx.x] = 0; }
+__global__ void simple(int *val, int N) { val[threadIdx.x] = 0; }
