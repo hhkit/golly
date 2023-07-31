@@ -56,10 +56,40 @@ class SyncBlockDetection {
   DenseMap<const BasicBlock *, unique_ptr<SyncBlock>> map;
 
 public:
+  struct SyncBlockRange;
+
   void analyze(const Function &f);
   SyncBlock *getTopLevelPhase(const BasicBlock &f) const;
+  SyncBlockRange iterateSyncBlocks(const BasicBlock &f) const;
 
   llvm::raw_ostream &dump(llvm::raw_ostream &) const;
+};
+
+struct SyncBlockDetection::SyncBlockRange {
+  struct iterator;
+
+  iterator begin() const;
+  iterator end() const;
+
+  SyncBlock *ptr_{};
+};
+
+struct SyncBlockDetection::SyncBlockRange::iterator {
+  SyncBlock *ptr_{};
+
+  SyncBlock &operator*() const { return *ptr_; }
+  SyncBlock *operator->() const { return ptr_; };
+  iterator &operator++() {
+    ptr_ = ptr_->getSuccessor();
+    return *this;
+  }
+  iterator operator++(int) {
+    auto ret = *this;
+    this->operator++();
+    return ret;
+  }
+
+  auto operator<=>(const iterator &) const = default;
 };
 
 class SyncBlockDetectionPass

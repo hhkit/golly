@@ -15,9 +15,14 @@ static bool isBarrier(const llvm::Instruction &instr) {
 
   auto as_fn = llvm::dyn_cast_or_null<llvm::CallInst>(&instr);
 
-  return as_fn ? barrier_instructions.contains(
-                     as_fn->getCalledFunction()->getName())
-               : llvm::isa<llvm::ReturnInst>(instr);
+  if (!as_fn)
+    return llvm::isa<llvm::ReturnInst>(instr);
+
+  if (const auto called_fn = as_fn->getCalledFunction()) {
+    // llvm::dbgs() << "called_fn " << called_fn->getName() << "\n";
+    return barrier_instructions.contains(called_fn->getName());
+  }
+  return false;
 }
 
 static unique_ptr<SyncBlock> build(const BasicBlock &bb) {
@@ -57,7 +62,7 @@ static unique_ptr<SyncBlock> build(const BasicBlock &bb) {
 
 SyncBlock::SyncBlock(const_iterator b, const_iterator e) : beg_{b}, end_{e} {
   assert((beg_ != end_) && "No trivial sync blocks");
-  for (last_ = ++b; b != e; ++last_, ++b)
+  for (last_ = b++; b != e; ++last_, ++b)
     ;
 }
 
@@ -67,7 +72,10 @@ void SyncBlock::addSuccessor(unique_ptr<SyncBlock> child) {
 
 SyncBlock *SyncBlock::getSuccessor() const { return successor.get(); }
 
-bool SyncBlock::willSynchronize() const { return detail::isBarrier(*last_); }
+bool SyncBlock::willSynchronize() const {
+  // llvm::dbgs() << "SYNCTEST" << *last_ << "\n";
+  return detail::isBarrier(*last_);
+}
 
 AnalysisKey SyncBlockDetectionPass::Key;
 void SyncBlockDetection::analyze(const Function &f) {
@@ -82,21 +90,38 @@ SyncBlock *SyncBlockDetection::getTopLevelPhase(const BasicBlock &bb) const {
   }
   return nullptr;
 }
+SyncBlockDetection::SyncBlockRange
+SyncBlockDetection::iterateSyncBlocks(const BasicBlock &f) const {
+  if (auto itr = map.find(&f); itr != map.end()) {
+    return SyncBlockRange{itr->second.get()};
+  }
+  return SyncBlockRange{};
+}
 
 llvm::raw_ostream &SyncBlockDetection::dump(llvm::raw_ostream &os) const {
   for (auto &&[bb, sbs] : map) {
-    auto itr = sbs.get();
-
     os << bb << "\n";
-    while (itr) {
-      for (auto &instr : *itr) {
+
+    for (auto &sb : iterateSyncBlocks(*bb)) {
+      for (auto &instr : sb) {
         os << "\tsb" << instr << "\n";
       }
+      if (sb.willSynchronize())
+        os << "----synchronizes\n";
       os << "----end sb\n ";
-      itr = itr->getSuccessor();
     }
   }
   return os;
+}
+
+SyncBlockDetection::SyncBlockRange::iterator
+SyncBlockDetection::SyncBlockRange::begin() const {
+  return iterator{ptr_};
+}
+
+SyncBlockDetection::SyncBlockRange::iterator
+SyncBlockDetection::SyncBlockRange::end() const {
+  return iterator{};
 }
 
 SyncBlockDetectionPass::Result
