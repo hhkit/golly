@@ -1,5 +1,5 @@
 #include <golly/Analysis/PscopBuilder.h>
-#include <golly/Support/isl.h>
+#include <golly/Support/isl_llvm.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/Optional.h>
 #include <llvm/ADT/PriorityQueue.h>
@@ -71,17 +71,27 @@ public:
   }
 
   void build(Function &f) {
+    using namespace islpp;
     // detect distribution domain of function
     // auto distribution_domain = islpp::set("{[tid]       | 0 <= 2 * tid <= 255
     // and 32 <= tid}");
-    auto dom1 = islpp::union_set("{ B[0]; A[2,8,1] }");
-    auto dom2 = islpp::union_set(" { A[2, 8, 1]}");
+    auto test = union_set(" { A[tid] | 0 <= tid <= 255}");
+    auto test2 = union_set(" { B[tid] | 0 <= tid <= 255}");
+    auto test3 = test + test2;
+    // auto set1 = set("{ B[0]; A[1] }"); // fails because set has more than one
+    // tuple
+
+    auto deflt = union_set();
+    auto dom1 = union_set("{ B[0]; A[2,8,1] }");
+    auto dom2 = union_set(" { A[2, 8, 1]}");
     auto dom3 = dom1 - dom2;
+
+    // do not reuse variables used in other equtions
+    auto dom4 = dom1 * deflt;
     // auto dom2 = islpp::set("{  B[0]; A[2,8,1] }");
 
-    auto ss = islpp::osstream{};
-    ss << dom1;
-    llvm::dbgs() << "isl: " << ss.str() << "\n";
+    llvm::dbgs() << "isl: " << dom3 << "\n";
+    llvm::dbgs() << "lexmax: " << lexmax(test3) << "\n";
 
     // iterate over bbs of function in BFS
     const auto first = &f.getEntryBlock();

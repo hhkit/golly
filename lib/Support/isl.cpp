@@ -1,7 +1,8 @@
 #include <cassert>
 #include <golly/Support/isl.h>
-
+#include <memory>
 namespace islpp {
+using std::unique_ptr;
 
 isl_manager &getManager() {
   static unique_ptr<isl_manager> singleton{};
@@ -35,7 +36,7 @@ string osstream::str() {
 }
 
 space::space(const space_config &names)
-    : base{([&]() -> base {
+    : base{([&]() -> isl_space * {
         auto sp = isl_space_alloc(ctx(), names.params.size(), names.in.size(),
                                   names.out.size());
 
@@ -55,34 +56,6 @@ space::space(const space_config &names)
 // union_set
 union_set::union_set(string_view str)
     : base{isl_union_set_read_from_str(ctx(), str.data())} {}
-
-union_set union_set::operator*(const union_set &rhs) const {
-  return union_set{isl_union_set_intersect(get(), rhs.get())};
-}
-
-union_set union_set::operator-(const union_set &rhs) const {
-  return union_set{isl_union_set_subtract(get(), rhs.get())};
-}
-
-boolean union_set::operator==(const union_set &rhs) const {
-  return isl_union_set_is_equal(get(), rhs.get());
-}
-
-boolean union_set::is_empty() const { return isl_union_set_is_empty(get()); }
-
-boolean union_set::operator<=(const union_set &rhs) const {
-  return isl_union_set_is_subset(get(), rhs.get());
-}
-
-boolean union_set::operator>=(const union_set &rhs) const {
-  return rhs <= *this;
-}
-
-boolean union_set::operator<(const union_set &rhs) const {
-  return isl_union_set_is_strict_subset(get(), rhs.get());
-}
-
-boolean union_set::operator>(const union_set &rhs) const { return rhs > *this; }
 
 // val
 val::val(consts val)
@@ -108,4 +81,13 @@ val::val(consts val)
 val::val(long i) : base{isl_val_int_from_si(ctx(), i)} {}
 
 val::val(unsigned long i) : base{isl_val_int_from_ui(ctx(), i)} {}
+
+// union_map
+union_map::union_map(string_view isl)
+    : base{isl_union_map_read_from_str(ctx(), isl.data())} {}
+
+// set
+set::set(string_view isl) : base{isl_set_read_from_str(ctx(), isl.data())} {}
+
+map::map(string_view isl) : base{isl_map_read_from_str(ctx(), isl.data())} {}
 } // namespace islpp
