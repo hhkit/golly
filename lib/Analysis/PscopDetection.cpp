@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <golly/Analysis/DimensionDetection.h>
 #include <golly/Analysis/PscopDetection.h>
+#include <golly/Analysis/SyncBlockDetection.h>
 #include <iostream>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SetVector.h>
@@ -376,8 +377,11 @@ struct PscopDetection {
     scalar_evolution.print(llvm::dbgs());
     const auto r = region_info.getTopLevelRegion();
     for (auto &&bb : r->blocks()) {
+      llvm::dbgs() << "bb: "
+                   << "\n";
+
       for (auto &&instr : *bb) {
-        llvm::dbgs() << instr << "\n";
+        llvm::dbgs() << "inst: " << instr << "\n";
         if (const auto ptr =
                 llvm::dyn_cast_or_null<llvm::GetElementPtrInst>(&instr)) {
 
@@ -466,7 +470,8 @@ PscopDetectionPass::run(Function &f, FunctionAnalysisManager &am) {
 
 PreservedAnalyses RunPscopDetection::run(Function &f,
                                          FunctionAnalysisManager &am) {
-  am.getResult<PscopDetectionPass>(f);
+  // am.getResult<PscopDetectionPass>(f);
+  am.getResult<SyncBlockDetectionPass>(f).dump(llvm::dbgs());
   return PreservedAnalyses::all();
 }
 

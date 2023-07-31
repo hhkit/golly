@@ -2,6 +2,7 @@
 
 add_llvm_pass_plugin(golly MODULE 
     golly.cpp
+    Analysis/SyncBlockDetection.cpp
     Analysis/PscopDetection.cpp
     Analysis/DimensionDetection.cpp
     Support/SCEVValidator.cpp)
