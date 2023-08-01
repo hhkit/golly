@@ -8,7 +8,6 @@
 #include <isl/point.h>
 #include <isl/printer.h>
 #include <isl/set.h>
-#include <isl/space.h>
 #include <isl/union_map.h>
 #include <isl/union_set.h>
 #include <isl/val.h>
@@ -137,7 +136,8 @@ class union_set : public detail::wrap<isl_union_set, isl_union_set_copy,
 public:
   using base::base;
 
-  explicit union_set(string_view isl = "{}");
+  union_set() : union_set{"{}"} {}
+  explicit union_set(string_view isl);
 };
 SET_OPERATORS(union_set)
 
@@ -257,17 +257,35 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
       &fn);
 }
 
-#define EXPRESSION(ID)                                                         \
+#define EXPRESSION(ID, MAP_TYPE)                                               \
   class ID : public detail::wrap<isl_##ID, isl_##ID##_copy, isl_##ID##_free> { \
   public:                                                                      \
     using base::base;                                                          \
     ID(string_view isl) : base{isl_##ID##_read_from_str(ctx(), isl.data())} {} \
+    explicit operator MAP_TYPE() {                                             \
+      return MAP_TYPE(isl_##MAP_TYPE##_from_##ID(ID{*this}.yield()));          \
+    }                                                                          \
   };                                                                           \
   CLOSED_BINOP(ID, operator+, isl_##ID##_add)
 
 #define PW_EXPR(ID) CLOSED_BINOP(ID, union_add, isl_##ID##_union_add)
-#define TUPLE_EXPR(ID) CLOSED_BINOP(ID, product, isl_##ID##_product)
 
+#define MINMAX_EXPR(ID)                                                        \
+  CLOSED_BINOP(ID, max, isl_##ID##_max)                                        \
+  CLOSED_BINOP(ID, min, isl_##ID##_min)
+
+#define COMPARE_OPS(ID, TYPE)                                                  \
+  OPEN_BINOP(TYPE, ID, ID, lt_##TYPE, isl_##ID##_lt_##TYPE)                    \
+  OPEN_BINOP(TYPE, ID, ID, le_##TYPE, isl_##ID##_le_##TYPE)                    \
+  OPEN_BINOP(TYPE, ID, ID, gt_##TYPE, isl_##ID##_gt_##TYPE)                    \
+  OPEN_BINOP(TYPE, ID, ID, ge_##TYPE, isl_##ID##_ge_##TYPE)                    \
+  OPEN_BINOP(TYPE, ID, ID, eq_##TYPE, isl_##ID##_eq_##TYPE)
+
+#define COMPARABLE_EXPR(ID)                                                    \
+  COMPARE_OPS(ID, set)                                                         \
+  CLOSED_BINOP(ID, operator*, isl_##ID##_mul)
+
+#define TUPLE_EXPR(ID) CLOSED_BINOP(ID, product, isl_##ID##_product)
 #define MULTI_EXPR(ID)                                                         \
   CLOSED_BINOP(ID, flat_range_product, isl_##ID##_flat_range_product)          \
   CLOSED_BINOP(ID, range_product, isl_##ID##_range_product)
@@ -276,14 +294,32 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
   OPEN_BINOP(FROM, FROM, TO, pullback, isl_##FROM##_pullback_##TO)
 
 // okay who designed this?
-EXPRESSION(aff);
-EXPRESSION(multi_aff);
-EXPRESSION(pw_aff);
-EXPRESSION(pw_multi_aff);
-EXPRESSION(multi_pw_aff);
-EXPRESSION(union_pw_aff);
-EXPRESSION(union_pw_multi_aff);
-EXPRESSION(multi_union_pw_aff);
+EXPRESSION(aff, map);
+EXPRESSION(multi_aff, map);
+EXPRESSION(pw_aff, map);
+EXPRESSION(pw_multi_aff, map);
+EXPRESSION(multi_pw_aff, map);
+EXPRESSION(union_pw_aff, union_map);
+EXPRESSION(union_pw_multi_aff, union_map);
+EXPRESSION(multi_union_pw_aff, union_map);
+
+MINMAX_EXPR(pw_aff);
+MINMAX_EXPR(multi_pw_aff);
+
+OPEN_UNOP(set, pw_aff, domain, isl_pw_aff_domain)
+
+// EXPRESSION(aff);
+// EXPRESSION(multi_aff);
+// EXPRESSION(pw_aff);
+// EXPRESSION(pw_multi_aff);
+// EXPRESSION(multi_pw_aff);
+// EXPRESSION(union_pw_aff);
+// EXPRESSION(union_pw_multi_aff);
+// EXPRESSION(multi_union_pw_aff);
+
+COMPARABLE_EXPR(aff);
+COMPARABLE_EXPR(pw_aff);
+COMPARE_OPS(pw_aff, map);
 
 PW_EXPR(pw_aff);
 PW_EXPR(pw_multi_aff);
@@ -343,6 +379,7 @@ public:
   PRINT_DEF(multi_aff)
   PRINT_DEF(pw_multi_aff)
   PRINT_DEF(multi_pw_aff)
+  PRINT_DEF(union_pw_aff)
   PRINT_DEF(union_pw_multi_aff)
   PRINT_DEF(multi_union_pw_aff)
 

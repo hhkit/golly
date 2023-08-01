@@ -60,7 +60,7 @@ public:
 
   void analyze(const Function &f);
   SyncBlock *getTopLevelPhase(const BasicBlock &f) const;
-  SyncBlockRange iterateSyncBlocks(const BasicBlock &f) const;
+  SyncBlockRange iterateSyncBlocks(const BasicBlock &bb) const;
 
   llvm::raw_ostream &dump(llvm::raw_ostream &) const;
 };
