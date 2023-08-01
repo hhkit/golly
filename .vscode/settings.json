@@ -92,7 +92,8 @@
     "iomanip": "cpp",
     "sstream": "cpp",
     "typeindex": "cpp",
-    "stack": "cpp"
+    "stack": "cpp",
+    "*.def": "cpp"
   },
   "C/C++ Include Guard.Macro Type": "Filepath",
   "C/C++ Include Guard.Suffix": "_H",
