@@ -34,14 +34,26 @@ namespace detail {
 
 class IVarDatabase {
 public:
-  bool addThreadIdentifier(string_view intrinsic, string_view name) {
-    return thread_ids.try_emplace(intrinsic, string(name)).second;
+  bool addThreadIdentifier(string_view intrinsic, string_view name,
+                           int max = 255) {
+    if (thread_ids.try_emplace(intrinsic, string(name)).second) {
+      domain = flat_cross(
+          domain,
+          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} <= {1} }}", name, max)});
+      return true;
+    }
+    return false;
   }
 
   void addInductionVariable(const llvm::Value *val) {
     if (induction_vars.find(val) == induction_vars.end()) {
-      induction_vars[val] = fmt::format("i{}", id++);
+      const auto &name = induction_vars[val] = fmt::format("i{}", id++);
+      domain = add_dims(domain, islpp::dim::set, {name});
     }
+  }
+
+  void addConstraint(islpp::set constraining_set) {
+    domain = domain * constraining_set;
   }
 
   bool isIVar(const llvm::Value *val) const {
@@ -49,7 +61,7 @@ public:
       return true;
 
     if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      return thread_ids.find(callInst->getFunction()->getName()) !=
+      return thread_ids.find(callInst->getCalledFunction()->getName()) !=
              thread_ids.end();
     }
 
@@ -61,7 +73,7 @@ public:
       return itr->second;
 
     if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      auto itr = thread_ids.find(callInst->getFunction()->getName());
+      auto itr = thread_ids.find(callInst->getCalledFunction()->getName());
       if (itr != thread_ids.end())
         return itr->second;
     }
@@ -81,9 +93,12 @@ public:
     return fmt::format("[{}]", fmt::join(tmp, ","));
   }
 
+  const islpp::set &getDomain() const { return domain; }
+
 private:
   llvm::StringMap<string> thread_ids;
   InductionVarSet induction_vars;
+  islpp::set domain{"{ [] }"};
 
   int id = 0;
 };
@@ -138,7 +153,6 @@ public:
   QuaffExpr visitConstant(const llvm::SCEVConstant *cint) {
     auto expr = fmt::format("{{ {} -> [{}]  }}", indvars,
                             cint->getAPInt().getSExtValue());
-    llvm::dbgs() << "expr:" << expr << "\n";
     return QuaffExpr{QuaffClass::CInt, islpp::pw_aff{expr}};
   }
 
@@ -225,11 +239,30 @@ public:
   }
 
   QuaffExpr visitAddRecExpr(const llvm::SCEVAddRecExpr *S) {
-    // this variable holds different values over loops
-    S->getStart()->print(llvm::dbgs());
-    S->getStepRecurrence(se)->print(llvm::dbgs());
-    // todo
-    return QuaffExpr{QuaffClass::Invalid};
+    if (!S->isAffine())
+      return QuaffExpr{QuaffClass::Invalid};
+
+    const auto start = S->getStart();
+    const auto step = S->getStepRecurrence(se);
+
+    if (start->isZero()) {
+      auto step = visit(S->getOperand(1));
+      return QuaffExpr{QuaffClass::Invalid};
+    }
+
+    auto zero_start = se.getAddRecExpr(se.getConstant(start->getType(), 0),
+                                       S->getStepRecurrence(se), S->getLoop(),
+                                       S->getNoWrapFlags());
+
+    auto res_expr = visit(zero_start);
+    auto start_expr = visit(start);
+
+    auto ret_type = std::max(res_expr.type, start_expr.type);
+
+    if (ret_type == QuaffClass::Invalid)
+      return QuaffExpr{QuaffClass::Invalid};
+
+    return QuaffExpr{ret_type, res_expr.expr + start_expr.expr};
   }
 
   QuaffExpr visitSequentialUMinExpr(const llvm::SCEVSequentialUMinExpr *S) {
@@ -237,6 +270,14 @@ public:
     return QuaffExpr{QuaffClass::Invalid};
   }
   QuaffExpr visitUnknown(const llvm::SCEVUnknown *S) {
+    const auto value = S->getValue();
+    if (ivdb.isIVar(value)) {
+      auto expr =
+          fmt::format("{{ {} -> [{}]  }}", indvars, ivdb.getName(value));
+      return QuaffExpr{QuaffClass::IVar, islpp::pw_aff{expr}};
+    } else
+      llvm::dbgs() << "not ivar";
+
     // todo
     return QuaffExpr{QuaffClass::Invalid};
   }
@@ -282,6 +323,8 @@ public:
                                          RegionInvariants &invariants) {
     auto loop = loop_info.getLoopFor(invariants.region->getEntry());
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
+    llvm::dbgs() << "scev dump: ";
+    scev->dump();
     QuaffBuilder builder{invariants, invariants.induction_variables,
                          scalar_evo};
 
@@ -293,20 +336,7 @@ public:
     using namespace islpp;
     // detect distribution domain of function
     affinateRegions();
-    if (0)
-
-    { // test bed
-      auto distribution_limit = set("[ntid] -> {[tid]| tid <= 32}");
-      auto pwaff = islpp::pw_aff{"{ [] -> [5] }"};
-
-      auto test_set = set("{[tidx, i0]| 0 <= i0 <= 32}");
-
-      llvm::dbgs() << "distrib: " << distribution_limit << "\n";
-      llvm::dbgs() << test_set << "\n";
-      llvm::dbgs() << "pwaff: "
-                   << pw_aff{"{ [x] -> [5] }"} + pw_aff{"{ [x] -> [x] }"}
-                   << "\n";
-    }
+    return;
 
     // iterate over bbs of function in BFS
     const auto first = &f.getEntryBlock();
@@ -332,7 +362,7 @@ public:
 
           // generate statement instance
           const auto sb_name = fmt::format("{}_{}", bb_name.data(), index++);
-          llvm::dbgs() << "\t\tsb: " << sb_name << "\n";
+          llvm::dbgs() << "\tsb: " << sb_name << "\n";
 
           for (auto &instr : sync_block) {
             if (const auto store =
@@ -365,7 +395,8 @@ public:
   void affinateRegions() {
     using namespace islpp;
     llvm::dbgs() << "START AFFINNATE\n";
-
+    region_info.dump();
+    loop_info.print(llvm::dbgs());
     const auto top_level_region = region_info.getTopLevelRegion();
     iteration_domain[top_level_region] = ([&]() {
       auto top_level_region_invar = RegionInvariants(top_level_region);
@@ -377,14 +408,12 @@ public:
     // bfs traversal
     // though honestly dfs works as well
     stack<Region *> stack;
-    llvm::RegionNode *v;
-    for (auto &child : *top_level_region)
-      stack.push(child.get());
+    stack.push(top_level_region);
 
     while (!stack.empty()) {
       auto visit = stack.top();
       stack.pop();
-
+      llvm::dbgs() << "visit: " << visit->getNameStr() << "\n";
       auto &parent_invariants = iteration_domain[visit->getParent()];
 
       if (iteration_domain.find(visit) == iteration_domain.end()) {
@@ -393,28 +422,40 @@ public:
         if (const auto loop = loop_info.getLoopFor(visit->getEntry())) {
           // build loop
           // are our constraints affine?
-          const auto bounds = loop->getBounds(scalar_evo);
-          auto &init = bounds->getInitialIVValue();
-          auto &fin = bounds->getFinalIVValue();
-          const auto step = bounds->getStepValue();
+          if (const auto bounds = loop->getBounds(scalar_evo)) {
+            auto &init = bounds->getInitialIVValue();
+            auto &fin = bounds->getFinalIVValue();
+            const auto step = bounds->getStepValue();
 
-          // if so, add the iteration variable into our iteration domain
-          const auto loopVar = loop->getCanonicalInductionVariable();
-          invariants.induction_variables.addInductionVariable(loopVar);
+            const auto init_aff = getQuasiaffineForm(init, parent_invariants);
+            const auto fin_aff = getQuasiaffineForm(fin, parent_invariants);
 
-          // dear future ivan:
-          // init and fin are defined OUTSIDE of the loop scope
-          const auto init_aff = getQuasiaffineForm(init, parent_invariants);
-          const auto fin_aff = getQuasiaffineForm(fin, parent_invariants);
-          // bounds->getDirection();
+            if (init_aff && fin_aff) {
+              // if so, add the iteration variable into our iteration domain
+              const auto loopVar = loop->getCanonicalInductionVariable();
+              invariants.induction_variables.addInductionVariable(loopVar);
 
-          llvm::dbgs() << "dom: "
-                       << (init_aff ? domain(init_aff->expr) : set{"{}"})
-                       << "\n";
-          llvm::dbgs() << invariants.induction_variables.getName(loopVar)
-                       << " \\in [" << init_aff << "," << fin_aff << "]\n";
+              // hacky, but we will reevaluate our init and final exprs to
+              // update the expression space
+              auto i = getQuasiaffineForm(init, invariants)->expr;
+              auto f = getQuasiaffineForm(fin, invariants)->expr;
 
-          auto domain = set{"{}"};
+              // we generate an identity function for the newly added variable
+              auto ident = pw_aff{fmt::format(
+                  "{{ {} -> [{}]}}", invariants.induction_variables.getVector(),
+                  invariants.induction_variables.getName(loopVar))};
+              invariants.induction_variables.addConstraint(le_set(i, ident) *
+                                                           lt_set(ident, f));
+
+              // [tid] : 0 <= tid <= 255
+              // [tid] -> [0], [tid] -> [5]
+              // [tid]
+              // [tid, i] -> [i]
+              // ------------------------------------
+              // goal: [tid,i] : 0 <= tid <= 255 and 0 <= i < 5
+            }
+          } else
+            llvm::dbgs() << "no bounds\n";
 
           // const auto domain =
           //     init_aff && fin_aff
@@ -422,10 +463,9 @@ public:
           //         : map{"{}"};
 
           llvm::dbgs() << visit->getNameStr() << " - "
-                       << invariants.induction_variables.getVector() << " in "
-                       << domain << "\n";
-        }
-
+                       << invariants.induction_variables.getDomain() << "\n";
+        } else
+          llvm::dbgs() << "no loop\n";
         // are we a result of a branch?
         // if so, check if the constraint is affine
 
@@ -435,8 +475,11 @@ public:
 
         iteration_domain[visit] = invariants; // pray for copy ellision
       }
-      for (auto &child : *visit)
+
+      for (auto &child : *visit) {
+        llvm::dbgs() << "push: " << child->getNameStr() << "\n";
         stack.push(child.get());
+      }
     }
   }
 

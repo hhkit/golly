@@ -10,4 +10,10 @@ __global__ void loop(int *val, int N) {
       val[j] = 1;
     val[3] = 2;
   }
+
+  for (int j = 0; j < 3; ++j)
+    val[j] = 5;
+
+  for (int j = 0; j < threadIdx.x; ++j)
+    val[j] = 7;
 }

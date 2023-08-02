@@ -2,7 +2,9 @@
 #define GOLLY_SUPPORT_ISL_H
 // a subset of isl wrapped up for me to use without killing myself
 
+#include <initializer_list>
 #include <isl/aff.h>
+#include <isl/constraint.h>
 #include <isl/ctx.h>
 #include <isl/map.h>
 #include <isl/point.h>
@@ -17,6 +19,7 @@
 #include <vector>
 
 namespace islpp {
+using std::initializer_list;
 using std::string;
 using std::string_view;
 using std::vector;
@@ -81,6 +84,15 @@ public:
 
 isl_ctx *ctx();
 
+enum class dim {
+  constant = isl_dim_cst,
+  set = isl_dim_set,
+  in = isl_dim_in,
+  out = isl_dim_out,
+  param = isl_dim_param,
+  all = isl_dim_all,
+};
+
 struct space_config {
   vector<string> set;
   vector<string> params;
@@ -111,6 +123,13 @@ struct space_config {
 #define REV_BINOP(TYPE, OP, OTHER)                                             \
   inline auto OP(const TYPE &lhs, const TYPE &rhs) { return OTHER(rhs, lhs); }
 
+#define MAP_OPERATORS(MAP, SET)                                                \
+  OPEN_UNOP(SET, MAP, wrap, isl_##MAP##_wrap);                                 \
+  OPEN_UNOP(MAP, SET, unwrap, isl_##SET##_unwrap);                             \
+  OPEN_BINOP(SET, SET, MAP, apply, isl_##SET##_apply);                         \
+  OPEN_UNOP(SET, MAP, domain, isl_##MAP##_domain);                             \
+  OPEN_UNOP(SET, MAP, range, isl_##MAP##_range);
+
 #define SET_OPERATORS(TYPE)                                                    \
   UN_PROP(TYPE, is_empty, isl_##TYPE##_is_empty)                               \
   CLOSED_BINOP(TYPE, operator*, isl_##TYPE##_intersect);                       \
@@ -121,7 +140,8 @@ struct space_config {
   REV_BINOP(TYPE, operator>=, operator<=);                                     \
   BIN_PROP(TYPE, operator<, isl_##TYPE##_is_strict_subset);                    \
   REV_BINOP(TYPE, operator>, operator<);                                       \
-  CLOSED_UNOP(TYPE, coalesce, isl_##TYPE##_coalesce);
+  CLOSED_UNOP(TYPE, coalesce, isl_##TYPE##_coalesce);                          \
+  CLOSED_BINOP(TYPE, cross, isl_##TYPE##_product);
 
 #define LEXICAL_OPERATORS(SET, MAP)                                            \
   OPEN_BINOP(MAP, SET, SET, operator<<, isl_##SET##_lex_lt_##SET);             \
@@ -155,13 +175,13 @@ public:
   enum class consts { identity };
   explicit union_map(string_view isl = "{}");
 };
+MAP_OPERATORS(union_map, union_set);
 
 CLOSED_UNOP(union_map, reverse, isl_union_map_reverse)
 SET_OPERATORS(union_map)
 OPEN_BINOP(union_map, union_map, val, fixed_power,
            isl_union_map_fixed_power_val);
-OPEN_UNOP(union_set, union_map, domain, isl_union_map_domain);
-OPEN_UNOP(union_set, union_map, range, isl_union_map_range);
+
 OPEN_BINOP(union_map, union_set, union_set, universal,
            isl_union_map_from_domain_and_range);
 OPEN_UNOP(union_map, union_set, identity, isl_union_set_identity);
@@ -169,15 +189,9 @@ OPEN_BINOP(union_map, union_map, union_set, domain_subtract,
            isl_union_map_intersect_domain);
 OPEN_BINOP(union_map, union_map, union_set, range_subtract,
            isl_union_map_intersect_range);
-OPEN_BINOP(union_set, union_set, union_map, apply, isl_union_set_apply);
-
 UN_PROP(union_map, is_single_valued, isl_union_map_is_single_valued);
 UN_PROP(union_map, is_injective, isl_union_map_is_injective);
 UN_PROP(union_map, is_bijective, isl_union_map_is_bijective);
-OPEN_UNOP(union_set, union_map, wrap, isl_union_map_wrap);
-OPEN_UNOP(union_map, union_set, unwrap, isl_union_set_unwrap);
-CLOSED_BINOP(union_set, cross, isl_union_set_product);
-CLOSED_BINOP(union_map, cross, isl_union_map_product);
 CLOSED_UNOP(union_map, zip, isl_union_map_zip);
 CLOSED_BINOP(union_map, domain_product, isl_union_map_domain_product);
 CLOSED_BINOP(union_map, range_product, isl_union_map_range_product);
@@ -204,7 +218,25 @@ public:
 
   set(string_view isl);
 };
+
 SET_OPERATORS(set)
+CLOSED_BINOP(set, flat_cross, isl_set_flat_product);
+
+inline isl_size dims(const set &s, dim on) {
+  return isl_set_dim(s.get(), static_cast<isl_dim_type>(on));
+}
+
+inline set add_dims(set s, dim on, initializer_list<string_view> vars) {
+  auto old_dim = dims(s, on);
+  auto new_set =
+      isl_set_add_dims(s.yield(), static_cast<isl_dim_type>(on), vars.size());
+
+  int index = old_dim;
+  for (auto &elem : vars)
+    new_set = isl_set_set_dim_name(new_set, static_cast<isl_dim_type>(on),
+                                   index, elem.data());
+  return set{new_set};
+}
 
 class map : public detail::wrap<isl_map, isl_map_copy, isl_map_free> {
 public:
@@ -213,6 +245,9 @@ public:
   map(string_view isl);
 };
 SET_OPERATORS(map)
+MAP_OPERATORS(map, set);
+
+CLOSED_BINOP(map, flat_cross, isl_map_flat_product);
 
 LEXICAL_OPERATORS(set, map);
 LEXICAL_OPERATORS(map, map);
@@ -262,11 +297,12 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
   public:                                                                      \
     using base::base;                                                          \
     ID(string_view isl) : base{isl_##ID##_read_from_str(ctx(), isl.data())} {} \
-    explicit operator MAP_TYPE() {                                             \
+    explicit operator MAP_TYPE() const {                                       \
       return MAP_TYPE(isl_##MAP_TYPE##_from_##ID(ID{*this}.yield()));          \
     }                                                                          \
   };                                                                           \
-  CLOSED_BINOP(ID, operator+, isl_##ID##_add)
+  CLOSED_BINOP(ID, operator+, isl_##ID##_add)                                  \
+  CLOSED_BINOP(ID, operator-, isl_##ID##_sub)
 
 #define PW_EXPR(ID) CLOSED_BINOP(ID, union_add, isl_##ID##_union_add)
 
@@ -306,6 +342,17 @@ EXPRESSION(multi_union_pw_aff, union_map);
 MINMAX_EXPR(pw_aff);
 MINMAX_EXPR(multi_pw_aff);
 
+inline isl_size dims(const pw_aff &s, dim on) {
+  return isl_pw_aff_dim(s.get(), static_cast<isl_dim_type>(on));
+}
+
+inline pw_aff add_dims(pw_aff s, dim on, unsigned count) {
+  auto old_dim = dims(s, on);
+  auto new_pw_aff =
+      isl_pw_aff_add_dims(s.yield(), static_cast<isl_dim_type>(on), count);
+  return pw_aff{new_pw_aff};
+}
+
 OPEN_UNOP(set, pw_aff, domain, isl_pw_aff_domain)
 
 // EXPRESSION(aff);
@@ -320,6 +367,8 @@ OPEN_UNOP(set, pw_aff, domain, isl_pw_aff_domain)
 COMPARABLE_EXPR(aff);
 COMPARABLE_EXPR(pw_aff);
 COMPARE_OPS(pw_aff, map);
+CLOSED_BINOP(pw_aff, operator/, isl_pw_aff_tdiv_q)
+CLOSED_BINOP(pw_aff, operator%, isl_pw_aff_tdiv_r)
 
 PW_EXPR(pw_aff);
 PW_EXPR(pw_multi_aff);
