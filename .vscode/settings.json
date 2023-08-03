@@ -93,7 +93,8 @@
     "sstream": "cpp",
     "typeindex": "cpp",
     "stack": "cpp",
-    "*.def": "cpp"
+    "*.def": "cpp",
+    "__std_stream": "cpp"
   },
   "C/C++ Include Guard.Macro Type": "Filepath",
   "C/C++ Include Guard.Suffix": "_H",
