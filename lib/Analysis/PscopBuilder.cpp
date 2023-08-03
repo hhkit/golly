@@ -7,10 +7,13 @@
 #include <llvm/ADT/Optional.h>
 #include <llvm/ADT/PriorityQueue.h>
 #include <llvm/ADT/StringSet.h>
+#include <llvm/Analysis/IteratedDominanceFrontier.h>
 #include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/RegionInfo.h>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/Instructions.h>
 #include <queue>
 #include <stack>
@@ -19,8 +22,12 @@
 #include <vector>
 
 namespace golly {
+using llvm::DenseMap;
+using llvm::DenseSet;
+using llvm::DominatorTree;
 using llvm::LoopInfo;
 using llvm::Optional;
+using llvm::PostDominatorTree;
 using llvm::RegionInfo;
 using llvm::ScalarEvolution;
 using std::stack;
@@ -129,8 +136,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
 
 struct RegionInvariants {
   Region *region;
-  islpp::union_set iteration_domain;
-  detail::IVarDatabase induction_variables;
+  detail::IVarDatabase ivars;
   int depth = 0;
 
   RegionInvariants(Region *reg = nullptr) : region{reg} {}
@@ -139,6 +145,23 @@ struct RegionInvariants {
     ret.region = child;
     ret.depth += 1;
     return ret;
+  }
+};
+
+struct BBInvariants {
+  islpp::set domain{"{ [] }"};
+
+  void applyConstraint(islpp::set constraint, bool intersect = true) {
+    using namespace islpp;
+    auto dim_diff = dims(domain, dim::set) - dims(constraint, dim::set);
+    assert(dim_diff >= 0 && "constraint cannot apply to lower loop dimension");
+    if (dim_diff > 0)
+      constraint = add_dims(constraint, dim::set, dim_diff);
+
+    if (intersect)
+      domain = domain * constraint;
+    else
+      domain = domain - constraint;
   }
 };
 
@@ -246,8 +269,24 @@ public:
     const auto step = S->getStepRecurrence(se);
 
     if (start->isZero()) {
+      // todo
       auto step = visit(S->getOperand(1));
-      return QuaffExpr{QuaffClass::Invalid};
+      // loop MUST exist
+      auto indvar = S->getLoop()->getCanonicalInductionVariable();
+
+      if (!indvar) // no canonical indvar
+        return QuaffExpr{QuaffClass::Invalid};
+
+      auto loop_expr = islpp::pw_aff{fmt::format(
+          "{{ {} -> [{}] }}", ivdb.getVector(), ivdb.getName(indvar))};
+
+      if (step.type != QuaffClass::CInt)
+        // loop expr is at least a loop variable, so the step must be const
+        // if step is ivar, param, or invalid, all multiplications by indvar are
+        // invalid
+        return QuaffExpr{QuaffClass::Invalid};
+
+      return QuaffExpr{QuaffClass::IVar, step.expr * loop_expr};
     }
 
     auto zero_start = se.getAddRecExpr(se.getConstant(start->getType(), 0),
@@ -312,21 +351,18 @@ private:
 class PscopBuilder {
 public:
   PscopBuilder(RegionInfo &ri, LoopInfo &li, ScalarEvolution &se,
+               DominatorTree &dom_tree, PostDominatorTree &pdt,
                SyncBlockDetection &sbd)
-      : region_info{ri}, loop_info{li}, scalar_evo{se}, sync_blocks{sbd} {}
-
-  const RegionInvariants *get_parent_domain(const Region *reg) {
-    return &iteration_domain[reg];
-  }
+      : region_info{ri}, loop_info{li}, scalar_evo{se},
+        sync_blocks{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
 
   Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val,
                                          RegionInvariants &invariants) {
     auto loop = loop_info.getLoopFor(invariants.region->getEntry());
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
-    llvm::dbgs() << "scev dump: ";
-    scev->dump();
-    QuaffBuilder builder{invariants, invariants.induction_variables,
-                         scalar_evo};
+    // llvm::dbgs() << "scev dump: ";
+    // scev->dump();
+    QuaffBuilder builder{invariants, invariants.ivars, scalar_evo};
 
     auto ret = builder.visit(scev);
     return ret ? ret : Optional<QuaffExpr>{};
@@ -336,6 +372,7 @@ public:
     using namespace islpp;
     // detect distribution domain of function
     affinateRegions();
+    affinateConstraints(f);
     return;
 
     // iterate over bbs of function in BFS
@@ -350,7 +387,7 @@ public:
       queue.pop();
       // retrieve iteration domain from enclosing region
       const auto visit_region = region_info.getRegionFor(visit);
-      const auto &invariants = iteration_domain[visit_region];
+      const auto &invariants = region_analysis[visit_region];
 
       // domain extracted
       // now we generate our access relations, visiting all loads and stores,
@@ -394,13 +431,13 @@ public:
 
   void affinateRegions() {
     using namespace islpp;
-    llvm::dbgs() << "START AFFINNATE\n";
+    llvm::dbgs() << "START AFFINNATE REGIONS\n";
     region_info.dump();
     loop_info.print(llvm::dbgs());
     const auto top_level_region = region_info.getTopLevelRegion();
-    iteration_domain[top_level_region] = ([&]() {
+    region_analysis[top_level_region] = ([&]() {
       auto top_level_region_invar = RegionInvariants(top_level_region);
-      top_level_region_invar.induction_variables.addThreadIdentifier(
+      top_level_region_invar.ivars.addThreadIdentifier(
           "llvm.nvvm.read.ptx.sreg.tid.x", "tidx");
       return top_level_region_invar;
     })();
@@ -414,9 +451,9 @@ public:
       auto visit = stack.top();
       stack.pop();
       llvm::dbgs() << "visit: " << visit->getNameStr() << "\n";
-      auto &parent_invariants = iteration_domain[visit->getParent()];
+      auto &parent_invariants = region_analysis[visit->getParent()];
 
-      if (iteration_domain.find(visit) == iteration_domain.end()) {
+      if (region_analysis.find(visit) == region_analysis.end()) {
         auto invariants = parent_invariants.clone(visit);
         // check our region's constraints
         if (const auto loop = loop_info.getLoopFor(visit->getEntry())) {
@@ -433,7 +470,7 @@ public:
             if (init_aff && fin_aff) {
               // if so, add the iteration variable into our iteration domain
               const auto loopVar = loop->getCanonicalInductionVariable();
-              invariants.induction_variables.addInductionVariable(loopVar);
+              invariants.ivars.addInductionVariable(loopVar);
 
               // hacky, but we will reevaluate our init and final exprs to
               // update the expression space
@@ -441,11 +478,11 @@ public:
               auto f = getQuasiaffineForm(fin, invariants)->expr;
 
               // we generate an identity function for the newly added variable
-              auto ident = pw_aff{fmt::format(
-                  "{{ {} -> [{}]}}", invariants.induction_variables.getVector(),
-                  invariants.induction_variables.getName(loopVar))};
-              invariants.induction_variables.addConstraint(le_set(i, ident) *
-                                                           lt_set(ident, f));
+              auto ident = pw_aff{
+                  fmt::format("{{ {} -> [{}]}}", invariants.ivars.getVector(),
+                              invariants.ivars.getName(loopVar))};
+              invariants.ivars.addConstraint(le_set(i, ident) *
+                                             lt_set(ident, f));
 
               // [tid] : 0 <= tid <= 255
               // [tid] -> [0], [tid] -> [5]
@@ -463,32 +500,166 @@ public:
           //         : map{"{}"};
 
           llvm::dbgs() << visit->getNameStr() << " - "
-                       << invariants.induction_variables.getDomain() << "\n";
+                       << invariants.ivars.getDomain() << "\n";
         } else
           llvm::dbgs() << "no loop\n";
-        // are we a result of a branch?
-        // if so, check if the constraint is affine
-
-        invariants.iteration_domain;
 
         // then, add the constraint into our set
-
-        iteration_domain[visit] = invariants; // pray for copy ellision
+        region_analysis[visit] = invariants; // pray for copy ellision
       }
 
-      for (auto &child : *visit) {
-        llvm::dbgs() << "push: " << child->getNameStr() << "\n";
+      for (auto &child : *visit)
         stack.push(child.get());
-      }
     }
   }
 
+  void affinateConstraints(Function &f) {
+    llvm::dbgs() << "START AFFINNATE CONSTRAINTS\n";
+
+    // we generate constraint sets for all ICmpInstructions
+    // since we know all indvars, we know which cmps are valid and which are
+    // not
+    DenseMap<const llvm::ICmpInst *, llvm::BasicBlock *> cmps;
+    DenseMap<const llvm::BranchInst *, llvm::BasicBlock *> branches;
+    DenseMap<llvm::BasicBlock *, const llvm::BranchInst *> branching_bbs;
+
+    for (auto &bb : f) {
+      auto region = region_info.getRegionFor(&bb);
+      bb_analysis[&bb] =
+          BBInvariants{region_analysis[region].ivars.getDomain()};
+
+      for (auto &instr : bb) {
+        if (const auto icmp = llvm::dyn_cast_or_null<llvm::ICmpInst>(&instr))
+          cmps.try_emplace(icmp, &bb);
+        else if (const auto branch =
+                     llvm::dyn_cast_or_null<llvm::BranchInst>(&instr))
+          branches.try_emplace(branch, &bb);
+      }
+    }
+
+    // optimize: forget about the loops
+    for (auto &loop : loop_info.getLoopsInPreorder()) {
+      cmps.erase(loop->getLatchCmpInst());
+      branches.erase(loop->getLoopGuardBranch());
+    }
+
+    for (auto &[f, s] : branches)
+      branching_bbs.try_emplace(s, f);
+
+    DenseMap<const llvm::ICmpInst *, islpp::set> cmp_constraints;
+    for (auto [icmp, bb] : cmps) {
+      auto region = region_info.getRegionFor(bb);
+      auto &region_inv = region_analysis[region];
+
+      const auto lhs = getQuasiaffineForm(*icmp->getOperand(0), region_inv);
+      const auto rhs = getQuasiaffineForm(*icmp->getOperand(1), region_inv);
+
+      if (lhs && rhs) {
+        const auto constraint = ([&]() -> Optional<islpp::set> {
+          switch (icmp->getPredicate()) {
+          case llvm::ICmpInst::ICMP_EQ:
+            return eq_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_NE:
+            return -eq_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_SLT:
+            return lt_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_SLE:
+            return le_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_SGT:
+            return gt_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_SGE:
+            return ge_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_ULT:
+            return lt_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_ULE:
+            return le_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_UGT:
+            return gt_set(lhs->expr, rhs->expr);
+          case llvm::ICmpInst::ICMP_UGE:
+            return ge_set(lhs->expr, rhs->expr);
+
+          default:
+            llvm::dbgs() << "unsupported comparison";
+            return Optional<islpp::set>{};
+          }
+        })();
+
+        if (constraint)
+          cmp_constraints.try_emplace(icmp, *constraint);
+        llvm::dbgs() << *icmp << " " << constraint << "\n";
+      } else
+        llvm::dbgs() << "not affine\n";
+    }
+
+    // then, we traverse the basic blocks (bfs/dfs both fine) and impose all
+    // constraints that dominate a certain bb on that bb to create that basic
+    // block's domain
+    llvm::SmallVector<llvm::BasicBlock *> pdf;
+    for (auto &succeeder : f) {
+      llvm::SmallPtrSet<llvm::BasicBlock *, 1> checkMe{&succeeder};
+      llvm::ReverseIDFCalculator calc{post_dom};
+      calc.setDefiningBlocks(checkMe);
+      calc.calculate(pdf);
+
+      // we now have the pdf of succeeder
+
+      vector<string> pdf_names;
+      for (auto &elem : pdf)
+        pdf_names.emplace_back(elem->getName());
+
+      // llvm::dbgs() << "pdf:\t" << succeeder.getName() << ": "
+      //              << fmt::format("{}", fmt::join(pdf_names, ", ")) << "\n";
+
+      for (auto &pd : pdf) {
+        if (auto itr = branching_bbs.find(pd); itr != branching_bbs.end()) {
+          auto branch = itr->second;
+          if (branch->getNumSuccessors() < 2)
+            continue;
+
+          const auto cmp =
+              llvm::dyn_cast_or_null<llvm::ICmpInst>(branch->getCondition());
+          if (!cmp)
+            continue;
+
+          if (auto itr = cmp_constraints.find(cmp);
+              itr != cmp_constraints.end()) {
+            const auto &constraint = itr->second;
+
+            const auto left = branch->getSuccessor(0);
+            const auto right = branch->getSuccessor(1);
+            auto &analysis = bb_analysis[&succeeder];
+            // llvm::dbgs() << "updating " << succeeder.getName() << " from "
+            //              << analysis.domain << " ";
+            if (dom_tree.dominates(left, &succeeder)) {
+              analysis.applyConstraint(constraint);
+              // llvm::dbgs() << " using " << constraint << " to "
+              //              << analysis.domain;
+            } else if (dom_tree.dominates(right, &succeeder)) {
+              analysis.applyConstraint(constraint, false);
+              // llvm::dbgs() << " using " << -constraint << " to "
+              //              << analysis.domain;
+            }
+          }
+        }
+      }
+
+      pdf.clear();
+    }
+
+    // for (auto &[bb, analysis] : bb_analysis) {
+    //   llvm::dbgs() << bb->getName() << ": " << analysis.domain << "\n";
+    // }
+  }
+
 private:
-  DenseMap<const Region *, RegionInvariants> iteration_domain;
+  DenseMap<const Region *, RegionInvariants> region_analysis;
+  DenseMap<const BasicBlock *, BBInvariants> bb_analysis;
   RegionInfo &region_info;
   LoopInfo &loop_info;
   ScalarEvolution &scalar_evo;
   SyncBlockDetection &sync_blocks;
+  DominatorTree &dom_tree;
+  PostDominatorTree &post_dom;
 };
 
 AnalysisKey PscopBuilderPass::Key;
@@ -498,6 +669,8 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
   PscopBuilder builder{fam.getResult<llvm::RegionInfoAnalysis>(f),
                        fam.getResult<llvm::LoopAnalysis>(f),
                        fam.getResult<llvm::ScalarEvolutionAnalysis>(f),
+                       fam.getResult<llvm::DominatorTreeAnalysis>(f),
+                       fam.getResult<llvm::PostDominatorTreeAnalysis>(f),
                        fam.getResult<golly::SyncBlockDetectionPass>(f)};
   builder.build(f);
   return {};

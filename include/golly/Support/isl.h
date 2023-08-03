@@ -221,9 +221,18 @@ public:
 
 SET_OPERATORS(set)
 CLOSED_BINOP(set, flat_cross, isl_set_flat_product);
+CLOSED_UNOP(set, operator-, isl_set_neg);
 
 inline isl_size dims(const set &s, dim on) {
   return isl_set_dim(s.get(), static_cast<isl_dim_type>(on));
+}
+
+inline set add_dims(set s, dim on, int count) {
+  auto old_dim = dims(s, on);
+  auto new_set =
+      isl_set_add_dims(s.yield(), static_cast<isl_dim_type>(on), count);
+
+  return set{new_set};
 }
 
 inline set add_dims(set s, dim on, initializer_list<string_view> vars) {
@@ -245,6 +254,7 @@ public:
   map(string_view isl);
 };
 SET_OPERATORS(map)
+CLOSED_UNOP(map, operator-, isl_map_neg);
 MAP_OPERATORS(map, set);
 
 CLOSED_BINOP(map, flat_cross, isl_map_flat_product);
@@ -342,6 +352,8 @@ EXPRESSION(multi_union_pw_aff, union_map);
 MINMAX_EXPR(pw_aff);
 MINMAX_EXPR(multi_pw_aff);
 
+template <typename T> T zero();
+
 inline isl_size dims(const pw_aff &s, dim on) {
   return isl_pw_aff_dim(s.get(), static_cast<isl_dim_type>(on));
 }
@@ -351,6 +363,11 @@ inline pw_aff add_dims(pw_aff s, dim on, unsigned count) {
   auto new_pw_aff =
       isl_pw_aff_add_dims(s.yield(), static_cast<isl_dim_type>(on), count);
   return pw_aff{new_pw_aff};
+}
+
+inline aff set_coeff(aff a, dim on, unsigned pos, int val) {
+  return aff{isl_aff_set_coefficient_si(
+      a.yield(), static_cast<isl_dim_type>(on), pos, val)};
 }
 
 OPEN_UNOP(set, pw_aff, domain, isl_pw_aff_domain)
