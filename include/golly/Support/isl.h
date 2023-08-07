@@ -10,6 +10,7 @@
 #include <isl/point.h>
 #include <isl/printer.h>
 #include <isl/set.h>
+#include <isl/space.h>
 #include <isl/union_map.h>
 #include <isl/union_set.h>
 #include <isl/val.h>
@@ -100,8 +101,8 @@ struct space_config {
   vector<string> out;
 };
 
-#define UN_PROP(TYPE, OP, FUNC)                                                \
-  inline auto OP(const TYPE &obj) { return FUNC(obj.get()); }
+#define UN_PROP(TYPE, RET, OP, FUNC)                                           \
+  inline RET OP(const TYPE &obj) { return RET{FUNC(obj.get())}; }
 
 #define BIN_PROP(TYPE, OP, FUNC)                                               \
   inline auto OP(const TYPE &lhs, const TYPE &rhs) {                           \
@@ -131,7 +132,7 @@ struct space_config {
   OPEN_UNOP(SET, MAP, range, isl_##MAP##_range);
 
 #define SET_OPERATORS(TYPE)                                                    \
-  UN_PROP(TYPE, is_empty, isl_##TYPE##_is_empty)                               \
+  UN_PROP(TYPE, isl_bool, is_empty, isl_##TYPE##_is_empty)                     \
   CLOSED_BINOP(TYPE, operator*, isl_##TYPE##_intersect);                       \
   CLOSED_BINOP(TYPE, operator-, isl_##TYPE##_subtract);                        \
   CLOSED_BINOP(TYPE, operator+, isl_##TYPE##_union);                           \
@@ -150,6 +151,12 @@ struct space_config {
   OPEN_BINOP(MAP, SET, SET, operator>>=, isl_##SET##_lex_ge_##SET);            \
   CLOSED_UNOP(SET, lexmin, isl_##SET##_lexmin);                                \
   CLOSED_UNOP(SET, lexmax, isl_##SET##_lexmax);
+
+#define DIMS(TYPE)                                                             \
+                                                                               \
+  inline isl_size dims(const TYPE &s, dim on) {                                \
+    return isl_##TYPE##_dim(s.get(), static_cast<isl_dim_type>(on));           \
+  }
 
 class union_set : public detail::wrap<isl_union_set, isl_union_set_copy,
                                       isl_union_set_free> {
@@ -189,9 +196,9 @@ OPEN_BINOP(union_map, union_map, union_set, domain_subtract,
            isl_union_map_intersect_domain);
 OPEN_BINOP(union_map, union_map, union_set, range_subtract,
            isl_union_map_intersect_range);
-UN_PROP(union_map, is_single_valued, isl_union_map_is_single_valued);
-UN_PROP(union_map, is_injective, isl_union_map_is_injective);
-UN_PROP(union_map, is_bijective, isl_union_map_is_bijective);
+UN_PROP(union_map, isl_bool, is_single_valued, isl_union_map_is_single_valued);
+UN_PROP(union_map, isl_bool, is_injective, isl_union_map_is_injective);
+UN_PROP(union_map, isl_bool, is_bijective, isl_union_map_is_bijective);
 CLOSED_UNOP(union_map, zip, isl_union_map_zip);
 CLOSED_BINOP(union_map, domain_product, isl_union_map_domain_product);
 CLOSED_BINOP(union_map, range_product, isl_union_map_range_product);
@@ -223,9 +230,7 @@ SET_OPERATORS(set)
 CLOSED_BINOP(set, flat_cross, isl_set_flat_product);
 CLOSED_UNOP(set, operator-, isl_set_neg);
 
-inline isl_size dims(const set &s, dim on) {
-  return isl_set_dim(s.get(), static_cast<isl_dim_type>(on));
-}
+DIMS(set)
 
 inline set add_dims(set s, dim on, int count) {
   auto old_dim = dims(s, on);
@@ -247,11 +252,35 @@ inline set add_dims(set s, dim on, initializer_list<string_view> vars) {
   return set{new_set};
 }
 
+inline set project_out(set s, dim on, unsigned start, unsigned count) {
+  return set{isl_set_project_out(s.yield(), static_cast<isl_dim_type>(on),
+                                 start, count)};
+}
+
+inline set project_out(set s, dim on, initializer_list<string_view> vars) {
+  auto res = s.get();
+  for (auto &var : vars) {
+    auto index = isl_set_find_dim_by_name(res, static_cast<isl_dim_type>(on),
+                                          var.data());
+    res = isl_set_project_out(res, static_cast<isl_dim_type>(on), index, 1);
+  }
+  return set{res};
+}
+
 class map : public detail::wrap<isl_map, isl_map_copy, isl_map_free> {
 public:
   using base::base;
 
   map(string_view isl);
+
+  explicit operator union_map() const & {
+
+    return union_map{isl_union_map_from_map(map{*this}.yield())};
+  }
+  explicit operator union_map() && {
+
+    return union_map{isl_union_map_from_map(yield())};
+  }
 };
 SET_OPERATORS(map)
 CLOSED_UNOP(map, operator-, isl_map_neg);
@@ -302,11 +331,26 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
       &fn);
 }
 
-#define EXPRESSION(ID, MAP_TYPE)                                               \
+#define MAP_EXPRESSION(ID, MAP_TYPE)                                           \
   class ID : public detail::wrap<isl_##ID, isl_##ID##_copy, isl_##ID##_free> { \
   public:                                                                      \
     using base::base;                                                          \
     ID(string_view isl) : base{isl_##ID##_read_from_str(ctx(), isl.data())} {} \
+    explicit operator MAP_TYPE() const {                                       \
+      return MAP_TYPE(isl_##MAP_TYPE##_from_##ID(ID{*this}.yield()));          \
+    }                                                                          \
+  };                                                                           \
+  CLOSED_BINOP(ID, operator+, isl_##ID##_add)                                  \
+  CLOSED_BINOP(ID, operator-, isl_##ID##_sub)
+
+#define SETMAP_EXPRESSION(ID, SET_TYPE, MAP_TYPE)                              \
+  class ID : public detail::wrap<isl_##ID, isl_##ID##_copy, isl_##ID##_free> { \
+  public:                                                                      \
+    using base::base;                                                          \
+    ID(string_view isl) : base{isl_##ID##_read_from_str(ctx(), isl.data())} {} \
+    explicit operator SET_TYPE() const {                                       \
+      return SET_TYPE(isl_##SET_TYPE##_from_##ID(ID{*this}.yield()));          \
+    }                                                                          \
     explicit operator MAP_TYPE() const {                                       \
       return MAP_TYPE(isl_##MAP_TYPE##_from_##ID(ID{*this}.yield()));          \
     }                                                                          \
@@ -340,23 +384,20 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
   OPEN_BINOP(FROM, FROM, TO, pullback, isl_##FROM##_pullback_##TO)
 
 // okay who designed this?
-EXPRESSION(aff, map);
-EXPRESSION(multi_aff, map);
-EXPRESSION(pw_aff, map);
-EXPRESSION(pw_multi_aff, map);
-EXPRESSION(multi_pw_aff, map);
-EXPRESSION(union_pw_aff, union_map);
-EXPRESSION(union_pw_multi_aff, union_map);
-EXPRESSION(multi_union_pw_aff, union_map);
+MAP_EXPRESSION(aff, map);
+SETMAP_EXPRESSION(multi_aff, set, map);
+SETMAP_EXPRESSION(pw_aff, set, map);
+SETMAP_EXPRESSION(pw_multi_aff, set, map);
+SETMAP_EXPRESSION(multi_pw_aff, set, map);
+MAP_EXPRESSION(union_pw_aff, union_map);
+MAP_EXPRESSION(union_pw_multi_aff, union_map);
+MAP_EXPRESSION(multi_union_pw_aff, union_map);
 
 MINMAX_EXPR(pw_aff);
 MINMAX_EXPR(multi_pw_aff);
 
-template <typename T> T zero();
-
-inline isl_size dims(const pw_aff &s, dim on) {
-  return isl_pw_aff_dim(s.get(), static_cast<isl_dim_type>(on));
-}
+DIMS(pw_aff)
+DIMS(multi_aff)
 
 inline pw_aff add_dims(pw_aff s, dim on, unsigned count) {
   auto old_dim = dims(s, on);
@@ -426,6 +467,130 @@ PULLBACK(union_pw_aff, union_pw_multi_aff);
 PULLBACK(union_pw_multi_aff, union_pw_multi_aff);
 PULLBACK(multi_union_pw_aff, union_pw_multi_aff);
 
+class space : public detail::wrap<isl_space, isl_space_copy, isl_space_free> {
+public:
+  using base::base;
+
+  template <typename T> T zero() const;
+  template <typename T> T constant(int val) const;
+  template <typename T> T coeff(dim on, int pos, int val) const;
+};
+
+// represents a domain
+class local_space : public detail::wrap<isl_local_space, isl_local_space_copy,
+                                        isl_local_space_free> {
+public:
+  using base::base;
+
+  local_space(space s) : base{isl_local_space_from_space(s.yield())} {}
+
+  template <typename T> T zero() const;
+  template <typename T> T constant(int val) const;
+  template <typename T> T coeff(dim on, int pos, int val) const;
+};
+
+#define SPACE_OPS(TYPE) UN_PROP(TYPE, space, get_space, isl_##TYPE##_get_space);
+
+#define DOMAIN_SPACE(TYPE)                                                     \
+  UN_PROP(TYPE, space, domain, isl_##TYPE##_get_domain_space);
+
+SPACE_OPS(set)
+SPACE_OPS(map)
+SPACE_OPS(union_set)
+SPACE_OPS(union_map)
+SPACE_OPS(aff)
+SPACE_OPS(multi_aff)
+SPACE_OPS(pw_aff)
+SPACE_OPS(pw_multi_aff)
+SPACE_OPS(multi_pw_aff)
+SPACE_OPS(union_pw_aff)
+SPACE_OPS(union_pw_multi_aff)
+SPACE_OPS(multi_union_pw_aff)
+
+DOMAIN_SPACE(aff)
+DOMAIN_SPACE(multi_aff)
+DOMAIN_SPACE(pw_aff)
+DOMAIN_SPACE(pw_multi_aff)
+DOMAIN_SPACE(multi_pw_aff)
+DOMAIN_SPACE(multi_union_pw_aff)
+
+template <typename T> local_space get_local_space(T &&val) {
+  return local_space{get_space(std::forward<T>(val))};
+}
+
+template <typename To, typename From> inline To cast(From val) {
+  if constexpr (std::is_same_v<From, To>)
+    return std::move(val);
+}
+
+#define CAST(FROM, TO)                                                         \
+  template <> inline TO cast<TO, FROM>(FROM val) {                             \
+    return TO{isl_##TO##_from_##FROM(val.yield())};                            \
+  }
+
+CAST(aff, multi_aff)
+
+template <typename T> inline T space::zero() const {
+  auto val = aff{isl_aff_zero_on_domain_space(space{*this}.yield())};
+  return cast<T>(std::move(val));
+}
+
+template <typename T> inline T space::constant(int val) const {
+  auto setted = aff{isl_aff_set_constant_si(zero<aff>().yield(), val)};
+  return cast<T>(std::move(setted));
+}
+
+template <typename T> inline T space::coeff(dim on, int index, int val) const {
+  auto setted = aff{isl_aff_set_coefficient_si(
+      zero<aff>().yield(), static_cast<isl_dim_type>(on), index, val)};
+  return cast<T>(std::move(setted));
+}
+
+template <typename T> inline T local_space::zero() const {
+  auto val = aff{isl_aff_zero_on_domain(local_space{*this}.yield())};
+  return cast<T>(std::move(val));
+}
+
+template <typename T> inline T local_space::constant(int val) const {
+  auto setted = aff{isl_aff_set_constant_si(zero<aff>().yield(), val)};
+  return cast<T>(std::move(setted));
+}
+
+template <typename T>
+inline T local_space::coeff(dim on, int index, int val) const {
+  auto setted = aff{isl_aff_set_coefficient_si(
+      zero<aff>().yield(), static_cast<isl_dim_type>(on), index, val)};
+  return cast<T>(std::move(setted));
+}
+
+// increments last val
+inline multi_aff increment(multi_aff ma) {
+  auto ret = ma;
+
+  auto incre = domain(ma).constant<islpp::aff>(1);
+  auto out = dims(ma, islpp::dim::out);
+  auto last = islpp::aff{isl_multi_aff_get_aff(ma.get(), out - 1)};
+  return islpp::multi_aff{
+      isl_multi_aff_set_aff(ret.yield(), out - 1, (last + incre).yield())};
+}
+
+inline multi_aff project_up(multi_aff ma) {
+  auto added = multi_aff{
+      isl_multi_aff_add_dims(ma.yield(), isl_dim_type::isl_dim_in, 1)};
+  auto ins = domain(added);
+  auto wcoeff = ins.coeff<multi_aff>(dim::in, dims(added, dim::in) - 1, 1);
+
+  return multi_aff{
+      isl_multi_aff_flat_range_product(added.yield(), wcoeff.yield())};
+}
+
+inline multi_aff append_zero(multi_aff ma) {
+  auto ins = domain(ma);
+  auto zer = ins.zero<multi_aff>();
+
+  return multi_aff{isl_multi_aff_flat_range_product(ma.yield(), zer.yield())};
+}
+
 #define PRINT_DEF(TYPE)                                                        \
   ostream &operator<<(const TYPE &v) {                                         \
     apply<isl_printer_print_##TYPE>(v.get());                                  \
@@ -438,6 +603,8 @@ public:
   PRINT_DEF(union_map)
   PRINT_DEF(set)
   PRINT_DEF(map)
+  PRINT_DEF(space)
+  PRINT_DEF(local_space)
   PRINT_DEF(val)
   PRINT_DEF(point)
   PRINT_DEF(aff)

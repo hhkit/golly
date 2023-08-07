@@ -28,6 +28,8 @@ using llvm::SmallVector;
 using llvm::SymbolTableList;
 
 using std::shared_ptr;
+using std::string;
+using std::string_view;
 using std::unique_ptr;
 
 class SyncBlock {
@@ -35,7 +37,7 @@ public:
   using InstListType = SymbolTableList<Instruction>;
   using const_iterator = InstListType::const_iterator;
 
-  SyncBlock(const_iterator b, const_iterator e);
+  SyncBlock(const_iterator b, const_iterator e, string_view name);
 
   void addSuccessor(unique_ptr<SyncBlock> child);
   SyncBlock *getSuccessor() const;
@@ -43,12 +45,15 @@ public:
   // phase ends in a barrier or return statement
   bool willSynchronize() const;
 
+  string_view getName() const;
+
   const_iterator begin() const { return beg_; }
   const_iterator end() const { return end_; }
 
 private:
   const_iterator beg_, end_, last_;
   unique_ptr<SyncBlock> successor;
+  string name;
 };
 
 // this analysis splits basic blocks by the barrier

@@ -1,3 +1,4 @@
+#include <fmt/format.h>
 #include <golly/Analysis/SyncBlockDetection.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/IR/CFG.h>
@@ -29,11 +30,14 @@ static unique_ptr<SyncBlock> build(const BasicBlock &bb) {
   auto beg = bb.begin();
   auto itr = beg;
   auto first = unique_ptr<SyncBlock>();
+
+  int count{};
   SyncBlock *prev{};
 
   auto append = [&](BasicBlock::const_iterator rbegin,
                     BasicBlock::const_iterator rend) {
-    auto newNode = std::make_unique<SyncBlock>(rbegin, rend);
+    auto newNode = std::make_unique<SyncBlock>(
+        rbegin, rend, fmt::format("{}_{}", bb.getName().str(), count++));
 
     if (prev) {
       prev->addSuccessor(std::move(newNode));
@@ -60,7 +64,8 @@ static unique_ptr<SyncBlock> build(const BasicBlock &bb) {
 }
 } // namespace detail
 
-SyncBlock::SyncBlock(const_iterator b, const_iterator e) : beg_{b}, end_{e} {
+SyncBlock::SyncBlock(const_iterator b, const_iterator e, string_view name)
+    : beg_{b}, end_{e}, name{name} {
   assert((beg_ != end_) && "No trivial sync blocks");
   for (last_ = b++; b != e; ++last_, ++b)
     ;
@@ -69,6 +74,8 @@ SyncBlock::SyncBlock(const_iterator b, const_iterator e) : beg_{b}, end_{e} {
 void SyncBlock::addSuccessor(unique_ptr<SyncBlock> child) {
   successor = std::move(child);
 }
+
+string_view SyncBlock::getName() const { return name; }
 
 SyncBlock *SyncBlock::getSuccessor() const { return successor.get(); }
 
@@ -103,8 +110,9 @@ llvm::raw_ostream &SyncBlockDetection::dump(llvm::raw_ostream &os) const {
     os << bb << "\n";
 
     for (auto &sb : iterateSyncBlocks(*bb)) {
+      os << sb.getName() << ":\n";
       for (auto &instr : sb) {
-        os << "\tsb" << instr << "\n";
+        os << "\t" << instr << "\n";
       }
       if (sb.willSynchronize())
         os << "----synchronizes\n";

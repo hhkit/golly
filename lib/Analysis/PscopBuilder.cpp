@@ -30,6 +30,7 @@ using llvm::Optional;
 using llvm::PostDominatorTree;
 using llvm::RegionInfo;
 using llvm::ScalarEvolution;
+using std::queue;
 using std::stack;
 using std::string;
 using std::string_view;
@@ -349,6 +350,9 @@ private:
 };
 
 class PscopBuilder {
+  using RegionAnalysis = DenseMap<const Region *, RegionInvariants>;
+  using BBAnalysis = DenseMap<const llvm::BasicBlock *, BBInvariants>;
+
 public:
   PscopBuilder(RegionInfo &ri, LoopInfo &li, ScalarEvolution &se,
                DominatorTree &dom_tree, PostDominatorTree &pdt,
@@ -371,67 +375,18 @@ public:
   void build(Function &f) {
     using namespace islpp;
     // detect distribution domain of function
-    affinateRegions();
-    affinateConstraints(f);
+    auto region_analysis = affinateRegions();
+    auto bb_analysis = affinateConstraints(f, region_analysis);
+    buildSchedule(f, region_analysis, bb_analysis);
     return;
-
-    // iterate over bbs of function in BFS
-    const auto first = &f.getEntryBlock();
-    std::queue<llvm::BasicBlock *> queue;
-    llvm::DenseSet<llvm::BasicBlock *> visited{first};
-
-    queue.emplace(first);
-
-    while (!queue.empty()) {
-      const auto visit = queue.front();
-      queue.pop();
-      // retrieve iteration domain from enclosing region
-      const auto visit_region = region_info.getRegionFor(visit);
-      const auto &invariants = region_analysis[visit_region];
-
-      // domain extracted
-      // now we generate our access relations, visiting all loads and stores,
-      // separated by sync block
-      {
-        int index = 0;
-        auto bb_name = visit->getName();
-        for (auto &sync_block : sync_blocks.iterateSyncBlocks(*visit)) {
-
-          // generate statement instance
-          const auto sb_name = fmt::format("{}_{}", bb_name.data(), index++);
-          llvm::dbgs() << "\tsb: " << sb_name << "\n";
-
-          for (auto &instr : sync_block) {
-            if (const auto store =
-                    llvm::dyn_cast_or_null<llvm::StoreInst>(&instr)) {
-              // record the write as a union set on the ptr
-              // islpp::union_set;
-            }
-
-            if (const auto load =
-                    llvm::dyn_cast_or_null<llvm::LoadInst>(&instr)) {
-              // record the read
-              // islpp::union_set;
-            }
-          }
-        }
-      }
-
-      // then we enqueue our children if they are not yet enqueued
-      for (auto &&elem : llvm::successors(visit)) {
-        const auto reg = region_info.getRegionFor(elem);
-        if (visited.contains(elem))
-          continue;
-
-        queue.push(elem);
-        visited.insert(elem);
-      }
-    }
   }
 
-  void affinateRegions() {
+  RegionAnalysis affinateRegions() {
     using namespace islpp;
     llvm::dbgs() << "START AFFINNATE REGIONS\n";
+
+    RegionAnalysis region_analysis;
+
     region_info.dump();
     loop_info.print(llvm::dbgs());
     const auto top_level_region = region_info.getTopLevelRegion();
@@ -511,10 +466,14 @@ public:
       for (auto &child : *visit)
         stack.push(child.get());
     }
+
+    return region_analysis;
   }
 
-  void affinateConstraints(Function &f) {
+  BBAnalysis affinateConstraints(Function &f, RegionAnalysis &region_analysis) {
     llvm::dbgs() << "START AFFINNATE CONSTRAINTS\n";
+
+    BBAnalysis bb_analysis;
 
     // we generate constraint sets for all ICmpInstructions
     // since we know all indvars, we know which cmps are valid and which are
@@ -603,14 +562,11 @@ public:
 
       // we now have the pdf of succeeder
 
-      vector<string> pdf_names;
-      for (auto &elem : pdf)
-        pdf_names.emplace_back(elem->getName());
-
-      // llvm::dbgs() << "pdf:\t" << succeeder.getName() << ": "
-      //              << fmt::format("{}", fmt::join(pdf_names, ", ")) << "\n";
-
+      // succeeder is control-dependent on all bbs in its post-dominance
+      // frontier
       for (auto &pd : pdf) {
+
+        // if any of these bbs are a branch that we are investigating
         if (auto itr = branching_bbs.find(pd); itr != branching_bbs.end()) {
           auto branch = itr->second;
           if (branch->getNumSuccessors() < 2)
@@ -628,17 +584,11 @@ public:
             const auto left = branch->getSuccessor(0);
             const auto right = branch->getSuccessor(1);
             auto &analysis = bb_analysis[&succeeder];
-            // llvm::dbgs() << "updating " << succeeder.getName() << " from "
-            //              << analysis.domain << " ";
-            if (dom_tree.dominates(left, &succeeder)) {
+
+            if (dom_tree.dominates(left, &succeeder))
               analysis.applyConstraint(constraint);
-              // llvm::dbgs() << " using " << constraint << " to "
-              //              << analysis.domain;
-            } else if (dom_tree.dominates(right, &succeeder)) {
+            else if (dom_tree.dominates(right, &succeeder))
               analysis.applyConstraint(constraint, false);
-              // llvm::dbgs() << " using " << -constraint << " to "
-              //              << analysis.domain;
-            }
           }
         }
       }
@@ -646,14 +596,117 @@ public:
       pdf.clear();
     }
 
-    // for (auto &[bb, analysis] : bb_analysis) {
-    //   llvm::dbgs() << bb->getName() << ": " << analysis.domain << "\n";
-    // }
+    return bb_analysis;
+  }
+
+  islpp::union_map buildSchedule(Function &f, RegionAnalysis &reg_analysis,
+                                 BBAnalysis &bb_analysis) {
+    llvm::dbgs() << "START BUILDING SCHEDULE\n";
+
+    auto distribution_domain =
+        reg_analysis[region_info.getTopLevelRegion()].ivars.getDomain();
+
+    struct LoopStatus {
+      islpp::multi_aff next_map;
+    };
+
+    llvm::DenseMap<llvm::Loop *, LoopStatus> loop_setup;
+    llvm::DenseMap<golly::SyncBlock *, islpp::multi_aff> analysis;
+
+    queue<llvm::BasicBlock *> queue;
+    llvm::DenseSet<llvm::BasicBlock *> visited;
+    queue.push(&f.getEntryBlock());
+    visited.insert(&f.getEntryBlock());
+
+    // get the parent expression, dispose of the associated
+    // Stmt_for_First[tidx] => [0]
+    {
+      const auto space = get_space(distribution_domain);
+      const auto maff = space.zero<islpp::multi_aff>();
+      loop_setup.try_emplace(nullptr, LoopStatus{maff});
+    }
+
+    while (!queue.empty()) {
+      auto visit = queue.front();
+      queue.pop();
+
+      auto loop = loop_info.getLoopFor(visit);
+      if (auto itr = loop_setup.find(loop); itr == loop_setup.end()) {
+        // setup the new loop
+        auto parent_loop = loop->getParentLoop();
+        assert(loop_setup.find(parent_loop) != loop_setup.end() &&
+               "Parent should already be visited");
+
+        auto &loop_status = loop_setup.find(parent_loop)->second;
+
+        // auto space = get_space(clone);
+        // auto increment = space.constant<islpp::aff>(1);
+
+        loop_setup.try_emplace(
+            loop, LoopStatus{append_zero(project_up(loop_status.next_map))});
+        loop_status.next_map = increment(loop_status.next_map);
+      }
+
+      // now we add ourselves to our domain
+      auto &status = loop_setup.find(loop)->second;
+
+      for (auto &sb : sync_blocks.iterateSyncBlocks(*visit)) {
+        auto dom = status.next_map;
+        dom = islpp::multi_aff{isl_multi_aff_set_tuple_name(
+            dom.yield(), isl_dim_type::isl_dim_in, sb.getName().data())};
+        analysis.try_emplace(&sb, dom);
+        status.next_map = increment(status.next_map);
+      }
+
+      for (auto &&child : successors(visit)) {
+        if (!visited.contains(child)) {
+          queue.push(child);
+          visited.insert(child);
+        }
+      }
+    }
+
+    islpp::union_map ret{"{}"};
+    for (auto &[bb, dom] : analysis)
+      ret = ret + islpp::union_map{islpp::map{dom}};
+
+    llvm::dbgs() << ret;
+
+    return ret;
+  }
+
+  void buildAccessRelations(BBAnalysis &bb_analysis) {
+
+    for (auto &[visit, domain] : bb_analysis) {
+
+      // now we generate our access relations, visiting all loads and stores,
+      // separated by sync block
+      int index = 0;
+      auto bb_name = visit->getName();
+      for (auto &sync_block : sync_blocks.iterateSyncBlocks(*visit)) {
+
+        // generate statement instance
+        const auto sb_name = fmt::format("{}_{}", bb_name.data(), index++);
+        llvm::dbgs() << "\tsb: " << sb_name << "\n";
+
+        for (auto &instr : sync_block) {
+          if (const auto store =
+                  llvm::dyn_cast_or_null<llvm::StoreInst>(&instr)) {
+            // record the write as a union set on the ptr
+            // islpp::union_set;
+          }
+
+          if (const auto load =
+                  llvm::dyn_cast_or_null<llvm::LoadInst>(&instr)) {
+            // record the read
+            // islpp::union_set;
+          }
+        }
+      }
+    }
   }
 
 private:
-  DenseMap<const Region *, RegionInvariants> region_analysis;
-  DenseMap<const BasicBlock *, BBInvariants> bb_analysis;
   RegionInfo &region_info;
   LoopInfo &loop_info;
   ScalarEvolution &scalar_evo;
