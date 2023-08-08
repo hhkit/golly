@@ -1,5 +1,5 @@
-#ifndef GOLLY_ANALYSIS_SYNCBLOCKDETECTION_H
-#define GOLLY_ANALYSIS_SYNCBLOCKDETECTION_H
+#ifndef GOLLY_ANALYSIS_STATEMENTDETECTION_H
+#define GOLLY_ANALYSIS_STATEMENTDETECTION_H
 // #include <llvm/IR/Instruction.h>
 #include <golly/Analysis/Statements.h>
 #include <llvm/ADT/DenseMap.h>
@@ -79,4 +79,4 @@ public:
 
 } // namespace golly
 
-#endif /* GOLLY_ANALYSIS_SYNCBLOCKDETECTION_H */
+#endif /* GOLLY_ANALYSIS_STATEMENTDETECTION_H */

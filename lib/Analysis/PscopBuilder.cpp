@@ -1,6 +1,6 @@
 #include <fmt/format.h>
 #include <golly/Analysis/PscopBuilder.h>
-#include <golly/Analysis/SyncBlockDetection.h>
+#include <golly/Analysis/StatementDetection.h>
 #include <golly/Support/isl_llvm.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/MapVector.h>
@@ -60,6 +60,12 @@ public:
     }
   }
 
+  void addInvariantLoad(const llvm::Value *val) { invariant_loads.insert(val); }
+
+  bool isInvariantLoad(const llvm::Value *val) const {
+    return invariant_loads.contains(val);
+  }
+
   void addConstraint(islpp::set constraining_set) {
     domain = domain * constraining_set;
   }
@@ -105,6 +111,7 @@ public:
 
 private:
   llvm::StringMap<string> thread_ids;
+  llvm::DenseSet<const llvm::Value *> invariant_loads;
   InductionVarSet induction_vars;
   islpp::set domain{"{ [] }"};
 
@@ -142,6 +149,7 @@ struct BBInvariants {
 
   void applyConstraint(islpp::set constraint, bool intersect = true) {
     using namespace islpp;
+
     auto dim_diff = dims(domain, dim::set) - dims(constraint, dim::set);
     assert(dim_diff >= 0 && "constraint cannot apply to lower loop dimension");
     if (dim_diff > 0)
@@ -152,6 +160,10 @@ struct BBInvariants {
     else
       domain = domain - constraint;
   }
+};
+struct AccessRelations {
+  islpp::union_map reads;
+  islpp::union_map writes;
 };
 
 class QuaffBuilder : public llvm::SCEVVisitor<QuaffBuilder, QuaffExpr> {
@@ -303,8 +315,14 @@ public:
       auto expr =
           fmt::format("{{ {} -> [{}]  }}", indvars, ivdb.getName(value));
       return QuaffExpr{QuaffClass::IVar, islpp::pw_aff{expr}};
-    } else
-      llvm::dbgs() << "not ivar";
+    }
+
+    if (ivdb.isInvariantLoad(value)) {
+      auto name = value->getName();
+      auto expr =
+          fmt::format("[{0}] -> {{ {1} -> [{0}]  }}", name.str(), indvars);
+      return QuaffExpr{QuaffClass::Param, islpp::pw_aff{expr}};
+    }
 
     // todo
     return QuaffExpr{QuaffClass::Invalid};
@@ -345,8 +363,8 @@ public:
   PscopBuilder(RegionInfo &ri, LoopInfo &li, ScalarEvolution &se,
                DominatorTree &dom_tree, PostDominatorTree &pdt,
                StatementDetection &sbd)
-      : region_info{ri}, loop_info{li}, scalar_evo{se},
-        sync_blocks{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
+      : region_info{ri}, loop_info{li},
+        scalar_evo{se}, stmt_info{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
 
   Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
                                          LoopVariables &invariants) {
@@ -361,23 +379,28 @@ public:
 
   Pscop build(Function &f) {
     using namespace islpp;
-    sync_blocks.dump(llvm::dbgs());
+    // stmt_info.dump(llvm::dbgs());
     // detect distribution domain of function
     auto loop_analysis = affinateRegions(f);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
     auto instance_domain = buildDomain(f, bb_analysis);
     auto temporal_schedule = buildSchedule(f, loop_analysis, bb_analysis);
-    llvm::dbgs() << "domain: " << instance_domain << "\n";
-    llvm::dbgs() << "schedule: " << temporal_schedule << "\n";
-    llvm::dbgs() << "time set: "
-                 << apply(range(instance_domain), temporal_schedule) << "\n";
+    auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
+
+    // llvm::dbgs() << "domain: " << instance_domain << "\n";
+    // llvm::dbgs() << "schedule: " << temporal_schedule << "\n";
+    // llvm::dbgs() << "time set: "
+    //              << apply(range(instance_domain), temporal_schedule) << "\n";
+
+    llvm::dbgs() << "writes: " << access_relations.writes << "\n";
+    llvm::dbgs() << "reads: " << access_relations.reads << "\n";
 
     return Pscop{
         .instantiation_domain = instance_domain,
         .temporal_schedule = temporal_schedule,
         .phase_schedule = union_map{"{}"},
-        .write_access_relation = union_map("{}"),
-        .read_access_relation = union_map{"{}"},
+        .write_access_relation = std::move(access_relations.writes),
+        .read_access_relation = std::move(access_relations.reads),
     };
   }
 
@@ -394,6 +417,9 @@ public:
       auto top_level_region_invar = LoopVariables();
       top_level_region_invar.addThreadIdentifier(
           "llvm.nvvm.read.ptx.sreg.tid.x", "tidx");
+      for (auto &arg : f.args())
+        top_level_region_invar.addInvariantLoad(&arg);
+
       return top_level_region_invar;
     })();
 
@@ -587,7 +613,7 @@ public:
     for (auto &[bb, invar] : bb_analysis) {
       auto domain = invar.domain;
 
-      for (auto &sb : sync_blocks.iterateStatements(*bb)) {
+      for (auto &sb : stmt_info.iterateStatements(*bb)) {
         sb.getName();
 
         auto out = name(domain, sb.getName());
@@ -636,7 +662,7 @@ public:
       // now we add ourselves to our domain
       auto &status = loop_setup.find(loop)->second;
 
-      for (auto &sb : sync_blocks.iterateStatements(*visit)) {
+      for (auto &sb : stmt_info.iterateStatements(*visit)) {
         auto dom = status;
         dom = islpp::multi_aff{isl_multi_aff_set_tuple_name(
             dom.yield(), isl_dim_type::isl_dim_in, sb.getName().data())};
@@ -648,41 +674,47 @@ public:
     islpp::union_map ret{"{}"};
     for (auto &[bb, dom] : analysis)
       ret = ret + islpp::union_map{islpp::map{dom}};
-
-    llvm::dbgs() << ret << "\n";
     return ret;
   }
 
-  void buildAccessRelations(BBAnalysis &bb_analysis) {
+  AccessRelations buildAccessRelations(LoopInstanceVars &loop_analysis,
+                                       BBAnalysis &bb_analysis) {
+    islpp::union_map writes{"{}"};
+    islpp::union_map reads{"{}"};
 
     for (auto &[visit, domain] : bb_analysis) {
 
       // now we generate our access relations, visiting all loads and stores,
       // separated by sync block
-      int index = 0;
-      auto bb_name = visit->getName();
-      for (auto &sync_block : sync_blocks.iterateStatements(*visit)) {
+      auto loop = loop_info.getLoopFor(visit);
+      auto &loop_domain = loop_analysis[loop];
 
-        // generate statement instance
-        const auto sb_name = fmt::format("{}_{}", bb_name.data(), index++);
-        llvm::dbgs() << "\tsb: " << sb_name << "\n";
+      for (auto &statement : stmt_info.iterateStatements(*visit)) {
+        if (const auto mem_access =
+                statement.as<golly::MemoryAccessStatement>()) {
+          auto ptr_operand =
+              const_cast<llvm::Value *>(mem_access->getPointerOperand());
 
-        for (auto &instr : sync_block) {
-          if (const auto store =
-                  llvm::dyn_cast_or_null<llvm::StoreInst>(&instr)) {
-            // record the write as a union set on the ptr
-            store->getNumOperands();
-            // islpp::union_set;
-          }
-
-          if (const auto load =
-                  llvm::dyn_cast_or_null<llvm::LoadInst>(&instr)) {
-            // record the read
-            // islpp::union_set;
+          if (auto qa = getQuasiaffineForm(*ptr_operand, loop, loop_domain)) {
+            auto as_map =
+                name(islpp::map{qa->expr}, islpp::dim::in, statement.getName());
+            switch (mem_access->getAccessType()) {
+            case MemoryAccessStatement::Access::Read:
+              reads = reads + islpp::union_map{as_map};
+              break;
+            case MemoryAccessStatement::Access::Write:
+              writes = writes + islpp::union_map{as_map};
+              break;
+            }
           }
         }
       }
     }
+
+    return {
+        .reads = std::move(reads),
+        .writes = std::move(writes),
+    };
   }
 
   template <typename T> void bfs(llvm::BasicBlock *first, T &&fn) {
@@ -711,7 +743,7 @@ private:
   RegionInfo &region_info;
   LoopInfo &loop_info;
   ScalarEvolution &scalar_evo;
-  StatementDetection &sync_blocks;
+  StatementDetection &stmt_info;
   DominatorTree &dom_tree;
   PostDominatorTree &post_dom;
 };

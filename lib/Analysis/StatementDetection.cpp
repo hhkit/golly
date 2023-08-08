@@ -1,5 +1,5 @@
 #include <fmt/format.h>
-#include <golly/Analysis/SyncBlockDetection.h>
+#include <golly/Analysis/StatementDetection.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Instructions.h>
@@ -34,7 +34,7 @@ static unique_ptr<Statement> build(const BasicBlock &bb) {
   while (itr != bb.end()) {
     if (Statement::isStatementDivider(*itr)) {
       auto type_index = dividerIndex(*itr);
-      llvm::dbgs() << *itr << " -- has type " << type_index << "\n";
+      // llvm::dbgs() << *itr << " -- has type " << type_index << "\n";
       append(type_index, beg, (++itr));
       beg = itr;
       continue;

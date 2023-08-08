@@ -50,12 +50,43 @@ bool BarrierStatement::isDivider(const llvm::Instruction &instr) {
   return false;
 }
 
-bool StoreStatement::isDivider(const llvm::Instruction &instr) {
-  return llvm::isa<llvm::StoreInst>(instr);
+bool MemoryAccessStatement::isDivider(const llvm::Instruction &instr) {
+  return llvm::isa<llvm::StoreInst>(instr) || llvm::isa<llvm::LoadInst>(instr);
 }
 
-bool LoadStatement::isDivider(const llvm::Instruction &instr) {
-  return llvm::isa<llvm::LoadInst>(instr);
+string_view MemoryAccessStatement::getSuffix() const {
+  switch (getAccessType()) {
+  case Access::Read:
+    return "LOAD.";
+  case Access::Write:
+    return "STORE.";
+  }
+  assert(false && "memory access should only be load or store");
+  return {};
+}
+
+MemoryAccessStatement::Access MemoryAccessStatement::getAccessType() const {
+  if (auto as_store = llvm::dyn_cast_or_null<llvm::StoreInst>(
+          &this->getDefiningInstruction()))
+    return Access::Write;
+  if (auto as_load = llvm::dyn_cast_or_null<llvm::LoadInst>(
+          &this->getDefiningInstruction()))
+    return Access::Read;
+
+  assert(false && "memory access should only be load or store");
+  return {};
+}
+
+const llvm::Value *MemoryAccessStatement::getPointerOperand() const {
+  if (auto as_store = llvm::dyn_cast_or_null<llvm::StoreInst>(
+          &this->getDefiningInstruction()))
+    return as_store->getPointerOperand();
+  if (auto as_load = llvm::dyn_cast_or_null<llvm::LoadInst>(
+          &this->getDefiningInstruction()))
+    return as_load->getPointerOperand();
+
+  assert(false && "memory access should only be load or store");
+  return nullptr;
 }
 
 Statement::Statement(const BasicBlock *bb, const_iterator b, const_iterator e,

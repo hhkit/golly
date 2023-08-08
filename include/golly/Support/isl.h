@@ -286,11 +286,19 @@ public:
     return union_map{isl_union_map_from_map(yield())};
   }
 };
+
+inline map name(map m, dim on, string_view name) {
+  return map{isl_map_set_tuple_name(m.yield(), static_cast<isl_dim_type>(on),
+                                    name.data())};
+}
+
 SET_OPERATORS(map)
 CLOSED_UNOP(map, operator-, isl_map_neg);
 MAP_OPERATORS(map, set);
 
 CLOSED_BINOP(map, flat_cross, isl_map_flat_product);
+CLOSED_BINOP(map, apply_range, isl_map_apply_range);
+CLOSED_BINOP(map, apply_domain, isl_map_apply_domain);
 
 LEXICAL_OPERATORS(set, map);
 LEXICAL_OPERATORS(map, map);

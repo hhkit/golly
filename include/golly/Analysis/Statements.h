@@ -17,8 +17,7 @@ using std::string_view;
 using std::unique_ptr;
 
 using StatementTypes =
-    detail::type_list<class BarrierStatement, class StoreStatement,
-                      class LoadStatement>;
+    detail::type_list<class BarrierStatement, class MemoryAccessStatement>;
 
 class Statement {
 public:
@@ -32,15 +31,16 @@ public:
   void addSuccessor(unique_ptr<Statement> child);
   Statement *getSuccessor() const;
 
-  virtual unsigned getTypeIndex() const { return StatementTypes::length; };
+  virtual size_t getTypeIndex() const { return StatementTypes::length; };
   template <typename T> bool isA() const {
     return getTypeIndex() == StatementTypes::index_of<T>();
   }
   template <typename T> T *as() {
-    return isA<T>() ? static_cast<T *>(this) : nullptr;
+    return static_cast<T *>(isA<T>() ? this : nullptr);
   }
+
   template <typename T> const T *as() const {
-    return isA<T>() ? static_cast<const T *>(this) : nullptr;
+    return static_cast<const T *>(isA<T>() ? this : nullptr);
   }
 
   string getName() const;
@@ -70,9 +70,7 @@ public:
   using Statement::Statement;
   using Base = BaseStatement;
 
-  unsigned getTypeIndex() const override {
-    return StatementTypes::index_of<T>();
-  }
+  size_t getTypeIndex() const override { return StatementTypes::index_of<T>(); }
 };
 
 // this statement contains a barrier
@@ -84,20 +82,20 @@ public:
   string_view getSuffix() const { return "Sync."; }
 };
 
-// this statement contains a store
-class StoreStatement : public BaseStatement<StoreStatement> {
+// this statement contains a memory access
+class MemoryAccessStatement : public BaseStatement<MemoryAccessStatement> {
 public:
-  using Base::Base;
-  static bool isDivider(const llvm::Instruction &);
-  string_view getSuffix() const { return "Store."; }
-};
+  enum class Access {
+    Read,
+    Write,
+  };
 
-// this statement contains a store
-class LoadStatement : public BaseStatement<LoadStatement> {
-public:
   using Base::Base;
   static bool isDivider(const llvm::Instruction &);
-  string_view getSuffix() const { return "Load."; }
+  string_view getSuffix() const;
+  const llvm::Value *getPointerOperand() const;
+
+  Access getAccessType() const;
 };
 
 namespace detail {

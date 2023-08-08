@@ -1,7 +1,7 @@
 #include <golly/Analysis/DimensionDetection.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/PscopDetection.h>
-#include <golly/Analysis/SyncBlockDetection.h>
+#include <golly/Analysis/StatementDetection.h>
 #include <llvm/Analysis/RegionInfo.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
