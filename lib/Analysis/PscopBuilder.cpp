@@ -136,17 +136,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
 }
 
 struct RegionInvariants {
-  Region *region;
   detail::IVarDatabase ivars;
-  int depth = 0;
-
-  RegionInvariants(Region *reg = nullptr) : region{reg} {}
-  RegionInvariants clone(Region *child) const {
-    auto ret = *this;
-    ret.region = child;
-    ret.depth += 1;
-    return ret;
-  }
 };
 
 struct BBInvariants {
@@ -350,7 +340,7 @@ private:
 };
 
 class PscopBuilder {
-  using RegionAnalysis = DenseMap<const Region *, RegionInvariants>;
+  using RegionAnalysis = DenseMap<const llvm::Loop *, RegionInvariants>;
   using BBAnalysis = DenseMap<const llvm::BasicBlock *, BBInvariants>;
 
 public:
@@ -360,9 +350,8 @@ public:
       : region_info{ri}, loop_info{li}, scalar_evo{se},
         sync_blocks{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
 
-  Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val,
+  Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
                                          RegionInvariants &invariants) {
-    auto loop = loop_info.getLoopFor(invariants.region->getEntry());
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
     // llvm::dbgs() << "scev dump: ";
     // scev->dump();
@@ -375,97 +364,82 @@ public:
   void build(Function &f) {
     using namespace islpp;
     // detect distribution domain of function
-    auto region_analysis = affinateRegions();
+    auto region_analysis = affinateRegions(f);
     auto bb_analysis = affinateConstraints(f, region_analysis);
-    auto domain = buildDomain(f, bb_analysis);
-    auto schedule = buildSchedule(f, region_analysis, bb_analysis);
+    auto instance_domain = buildDomain(f, bb_analysis);
+    auto temporal_schedule = buildSchedule(f, region_analysis, bb_analysis);
+    llvm::dbgs() << "domain: " << instance_domain << "\n";
+    llvm::dbgs() << "schedule: " << temporal_schedule << "\n";
+    llvm::dbgs() << "time set: "
+                 << apply(range(instance_domain), temporal_schedule) << "\n";
   }
 
-  RegionAnalysis affinateRegions() {
+  RegionAnalysis affinateRegions(Function &f) {
     using namespace islpp;
     llvm::dbgs() << "START AFFINNATE REGIONS\n";
 
     RegionAnalysis region_analysis;
 
-    region_info.dump();
-    loop_info.print(llvm::dbgs());
-    const auto top_level_region = region_info.getTopLevelRegion();
-    region_analysis[top_level_region] = ([&]() {
-      auto top_level_region_invar = RegionInvariants(top_level_region);
+    // region_info.dump();
+    // loop_info.print(llvm::dbgs());
+
+    region_analysis[nullptr] = ([&]() {
+      auto top_level_region_invar = RegionInvariants();
       top_level_region_invar.ivars.addThreadIdentifier(
           "llvm.nvvm.read.ptx.sreg.tid.x", "tidx");
       return top_level_region_invar;
     })();
 
-    // bfs traversal
-    // though honestly dfs works as well
-    stack<Region *> stack;
-    stack.push(top_level_region);
+    bfs(&f.getEntryBlock(), [&](llvm::BasicBlock *visit) {
+      auto loop = loop_info.getLoopFor(visit);
 
-    while (!stack.empty()) {
-      auto visit = stack.top();
-      stack.pop();
-      llvm::dbgs() << "visit: " << visit->getNameStr() << "\n";
-      auto &parent_invariants = region_analysis[visit->getParent()];
+      // if new loop
+      if (auto itr = region_analysis.find(loop); itr == region_analysis.end()) {
+        // setup the new loop
+        auto parent_loop = loop->getParentLoop();
+        assert(region_analysis.find(parent_loop) != region_analysis.end() &&
+               "Parent should already be visited");
 
-      if (region_analysis.find(visit) == region_analysis.end()) {
-        auto invariants = parent_invariants.clone(visit);
-        // check our region's constraints
-        if (const auto loop = loop_info.getLoopFor(visit->getEntry())) {
-          // build loop
-          // are our constraints affine?
-          if (const auto bounds = loop->getBounds(scalar_evo)) {
-            auto &init = bounds->getInitialIVValue();
-            auto &fin = bounds->getFinalIVValue();
-            const auto step = bounds->getStepValue();
+        auto &parent = region_analysis.find(parent_loop)->second;
+        auto invariants = parent;
 
-            const auto init_aff = getQuasiaffineForm(init, parent_invariants);
-            const auto fin_aff = getQuasiaffineForm(fin, parent_invariants);
+        // are our constraints affine?
+        if (const auto bounds = loop->getBounds(scalar_evo)) {
+          auto &init = bounds->getInitialIVValue();
+          auto &fin = bounds->getFinalIVValue();
+          const auto step = bounds->getStepValue();
 
-            if (init_aff && fin_aff) {
-              // if so, add the iteration variable into our iteration domain
-              const auto loopVar = loop->getCanonicalInductionVariable();
-              invariants.ivars.addInductionVariable(loopVar);
+          const auto init_aff = getQuasiaffineForm(init, parent_loop, parent);
+          const auto fin_aff = getQuasiaffineForm(fin, parent_loop, parent);
 
-              // hacky, but we will reevaluate our init and final exprs to
-              // update the expression space
-              auto i = getQuasiaffineForm(init, invariants)->expr;
-              auto f = getQuasiaffineForm(fin, invariants)->expr;
+          if (init_aff && fin_aff) {
+            // if so, add the iteration variable into our iteration domain
+            const auto loopVar = loop->getCanonicalInductionVariable();
+            invariants.ivars.addInductionVariable(loopVar);
 
-              // we generate an identity function for the newly added variable
-              auto ident = pw_aff{
-                  fmt::format("{{ {} -> [{}]}}", invariants.ivars.getVector(),
-                              invariants.ivars.getName(loopVar))};
-              invariants.ivars.addConstraint(le_set(i, ident) *
-                                             lt_set(ident, f));
+            // hacky, but we will reevaluate our init and final exprs to
+            // update the expression space
+            auto i = getQuasiaffineForm(init, loop, invariants)->expr;
+            auto f = getQuasiaffineForm(fin, loop, invariants)->expr;
 
-              // [tid] : 0 <= tid <= 255
-              // [tid] -> [0], [tid] -> [5]
-              // [tid]
-              // [tid, i] -> [i]
-              // ------------------------------------
-              // goal: [tid,i] : 0 <= tid <= 255 and 0 <= i < 5
-            }
-          } else
-            llvm::dbgs() << "no bounds\n";
+            // we generate an identity function for the newly added variable
+            auto ident = pw_aff{fmt::format("{{ {} -> [{}]}}",
+                                            invariants.ivars.getVector(),
+                                            invariants.ivars.getName(loopVar))};
+            invariants.ivars.addConstraint(le_set(i, ident) * lt_set(ident, f));
 
-          // const auto domain =
-          //     init_aff && fin_aff
-          //         ? lt_map(range(init_aff->expr), range(fin_aff->expr))
-          //         : map{"{}"};
+            // [tid] : 0 <= tid <= 255
+            // [tid] -> [0], [tid] -> [5]
+            // [tid]
+            // [tid, i] -> [i]
+            // ------------------------------------
+            // goal: [tid,i] : 0 <= tid <= 255 and 0 <= i < 5
+          }
+        }
 
-          llvm::dbgs() << visit->getNameStr() << " - "
-                       << invariants.ivars.getDomain() << "\n";
-        } else
-          llvm::dbgs() << "no loop\n";
-
-        // then, add the constraint into our set
-        region_analysis[visit] = invariants; // pray for copy ellision
+        region_analysis.try_emplace(loop, invariants);
       }
-
-      for (auto &child : *visit)
-        stack.push(child.get());
-    }
+    });
 
     return region_analysis;
   }
@@ -483,9 +457,8 @@ public:
     DenseMap<llvm::BasicBlock *, const llvm::BranchInst *> branching_bbs;
 
     for (auto &bb : f) {
-      auto region = region_info.getRegionFor(&bb);
-      bb_analysis[&bb] =
-          BBInvariants{region_analysis[region].ivars.getDomain()};
+      bb_analysis[&bb] = BBInvariants{
+          region_analysis[loop_info.getLoopFor(&bb)].ivars.getDomain()};
 
       for (auto &instr : bb) {
         if (const auto icmp = llvm::dyn_cast_or_null<llvm::ICmpInst>(&instr))
@@ -507,11 +480,13 @@ public:
 
     DenseMap<const llvm::ICmpInst *, islpp::set> cmp_constraints;
     for (auto [icmp, bb] : cmps) {
-      auto region = region_info.getRegionFor(bb);
-      auto &region_inv = region_analysis[region];
+      auto loop = loop_info.getLoopFor(bb);
+      auto &region_inv = region_analysis[loop];
 
-      const auto lhs = getQuasiaffineForm(*icmp->getOperand(0), region_inv);
-      const auto rhs = getQuasiaffineForm(*icmp->getOperand(1), region_inv);
+      const auto lhs =
+          getQuasiaffineForm(*icmp->getOperand(0), loop, region_inv);
+      const auto rhs =
+          getQuasiaffineForm(*icmp->getOperand(1), loop, region_inv);
 
       if (lhs && rhs) {
         const auto constraint = ([&]() -> Optional<islpp::set> {
@@ -545,7 +520,7 @@ public:
 
         if (constraint)
           cmp_constraints.try_emplace(icmp, *constraint);
-        llvm::dbgs() << *icmp << " " << constraint << "\n";
+        // llvm::dbgs() << *icmp << " " << constraint << "\n";
       } else
         llvm::dbgs() << "not affine\n";
     }
@@ -610,7 +585,7 @@ public:
         auto out = name(domain, sb.getName());
         auto in = name(islpp::set{"{ [] }"}, sb.getName());
 
-        llvm::dbgs() << unwrap(cross(in, out)) << "\n";
+        ret = ret + islpp::union_map{unwrap(cross(in, out))};
       }
     }
     return ret;
@@ -620,20 +595,12 @@ public:
                                  BBAnalysis &bb_analysis) {
     llvm::dbgs() << "START BUILDING SCHEDULE\n";
 
-    auto distribution_domain =
-        reg_analysis[region_info.getTopLevelRegion()].ivars.getDomain();
+    auto distribution_domain = reg_analysis[nullptr].ivars.getDomain();
 
-    struct LoopStatus {
-      islpp::multi_aff next_map;
-    };
+    using LoopStatus = islpp::multi_aff;
 
     llvm::DenseMap<llvm::Loop *, LoopStatus> loop_setup;
     llvm::DenseMap<golly::SyncBlock *, islpp::multi_aff> analysis;
-
-    queue<llvm::BasicBlock *> queue;
-    llvm::DenseSet<llvm::BasicBlock *> visited;
-    queue.push(&f.getEntryBlock());
-    visited.insert(&f.getEntryBlock());
 
     // get the parent expression, dispose of the associated
     // Stmt_for_First[tidx] => [0]
@@ -643,10 +610,7 @@ public:
       loop_setup.try_emplace(nullptr, LoopStatus{maff});
     }
 
-    while (!queue.empty()) {
-      auto visit = queue.front();
-      queue.pop();
-
+    bfs(&f.getEntryBlock(), [&](llvm::BasicBlock *visit) {
       auto loop = loop_info.getLoopFor(visit);
       if (auto itr = loop_setup.find(loop); itr == loop_setup.end()) {
         // setup the new loop
@@ -657,28 +621,21 @@ public:
         auto &loop_status = loop_setup.find(parent_loop)->second;
 
         loop_setup.try_emplace(
-            loop, LoopStatus{append_zero(project_up(loop_status.next_map))});
-        loop_status.next_map = increment(loop_status.next_map);
+            loop, LoopStatus{append_zero(project_up(loop_status))});
+        loop_status = increment(loop_status);
       }
 
       // now we add ourselves to our domain
       auto &status = loop_setup.find(loop)->second;
 
       for (auto &sb : sync_blocks.iterateSyncBlocks(*visit)) {
-        auto dom = status.next_map;
+        auto dom = status;
         dom = islpp::multi_aff{isl_multi_aff_set_tuple_name(
             dom.yield(), isl_dim_type::isl_dim_in, sb.getName().data())};
         analysis.try_emplace(&sb, dom);
-        status.next_map = increment(status.next_map);
+        status = increment(status);
       }
-
-      for (auto &&child : successors(visit)) {
-        if (!visited.contains(child)) {
-          queue.push(child);
-          visited.insert(child);
-        }
-      }
-    }
+    });
 
     islpp::union_map ret{"{}"};
     for (auto &[bb, dom] : analysis)
@@ -715,6 +672,28 @@ public:
             // record the read
             // islpp::union_set;
           }
+        }
+      }
+    }
+  }
+
+  template <typename T> void bfs(llvm::BasicBlock *first, T &&fn) {
+
+    queue<llvm::BasicBlock *> queue;
+    llvm::DenseSet<llvm::BasicBlock *> visited;
+    queue.push(first);
+    visited.insert(first);
+
+    while (!queue.empty()) {
+      auto visit = queue.front();
+      queue.pop();
+
+      fn(visit);
+
+      for (auto &&child : successors(visit)) {
+        if (!visited.contains(child)) {
+          queue.push(child);
+          visited.insert(child);
         }
       }
     }
