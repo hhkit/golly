@@ -4,6 +4,7 @@
 #include <golly/Support/isl.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/Support/raw_ostream.h>
 #include <memory>
 
 namespace llvm {
@@ -38,6 +39,8 @@ struct Pscop {
                                          // of reads it performs
 
   // dependence relation irrelevant for race detection
+
+  void dump(llvm::raw_ostream &) const;
 };
 
 class PscopBuilderPass : public AnalysisInfoMixin<PscopBuilderPass> {

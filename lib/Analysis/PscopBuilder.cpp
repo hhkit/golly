@@ -142,6 +142,14 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
   return o << e.expr;
 }
 
+void Pscop::dump(llvm::raw_ostream &os) const {
+  os << "domain: " << instantiation_domain << "\n";
+  os << "temporal_schedule: " << temporal_schedule << "\n";
+  os << "sync_schedule: " << phase_schedule << "\n";
+  os << "writes: " << write_access_relation << "\n";
+  os << "reads: " << read_access_relation << "\n";
+}
+
 using LoopVariables = detail::IVarDatabase;
 
 struct BBInvariants {
@@ -387,14 +395,6 @@ public:
     auto temporal_schedule = buildSchedule(f, loop_analysis, bb_analysis);
     auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
 
-    // llvm::dbgs() << "domain: " << instance_domain << "\n";
-    // llvm::dbgs() << "schedule: " << temporal_schedule << "\n";
-    // llvm::dbgs() << "time set: "
-    //              << apply(range(instance_domain), temporal_schedule) << "\n";
-
-    llvm::dbgs() << "writes: " << access_relations.writes << "\n";
-    llvm::dbgs() << "reads: " << access_relations.reads << "\n";
-
     return Pscop{
         .instantiation_domain = instance_domain,
         .temporal_schedule = temporal_schedule,
@@ -406,19 +406,14 @@ public:
 
   LoopInstanceVars affinateRegions(Function &f) {
     using namespace islpp;
-    llvm::dbgs() << "START AFFINNATE REGIONS\n";
-
     LoopInstanceVars loop_to_instances;
-
-    // region_info.dump();
-    // loop_info.print(llvm::dbgs());
 
     loop_to_instances[nullptr] = ([&]() {
       auto top_level_region_invar = LoopVariables();
       top_level_region_invar.addThreadIdentifier(
           "llvm.nvvm.read.ptx.sreg.tid.x", "tidx");
       for (auto &arg : f.args())
-        top_level_region_invar.addInvariantLoad(&arg);
+        top_level_region_invar.addInvariantLoad(&arg); // todo: globals
 
       return top_level_region_invar;
     })();
@@ -479,8 +474,6 @@ public:
   }
 
   BBAnalysis affinateConstraints(Function &f, LoopInstanceVars &loop_analysis) {
-    llvm::dbgs() << "START AFFINNATE CONSTRAINTS\n";
-
     BBAnalysis bb_analysis;
 
     // we generate constraint sets for all ICmpInstructions
@@ -758,6 +751,8 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
                        fam.getResult<llvm::DominatorTreeAnalysis>(f),
                        fam.getResult<llvm::PostDominatorTreeAnalysis>(f),
                        fam.getResult<golly::StatementDetectionPass>(f)};
-  return builder.build(f);
+  auto ret = builder.build(f);
+  ret.dump(llvm::dbgs());
+  return ret;
 }
 } // namespace golly
