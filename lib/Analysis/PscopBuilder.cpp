@@ -135,9 +135,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
   return o << e.expr;
 }
 
-struct RegionInvariants {
-  detail::IVarDatabase ivars;
-};
+using LoopVariables = detail::IVarDatabase;
 
 struct BBInvariants {
   islpp::set domain{"{ [] }"};
@@ -158,7 +156,7 @@ struct BBInvariants {
 
 class QuaffBuilder : public llvm::SCEVVisitor<QuaffBuilder, QuaffExpr> {
 public:
-  QuaffBuilder(RegionInvariants &ri, detail::IVarDatabase &ivdb,
+  QuaffBuilder(LoopVariables &ri, detail::IVarDatabase &ivdb,
                llvm::ScalarEvolution &se)
       : ri{ri}, ivdb{ivdb}, se{se} {
     indvars = ivdb.getVector();
@@ -333,14 +331,14 @@ public:
   }
 
 private:
-  RegionInvariants &ri;
+  LoopVariables &ri;
   detail::IVarDatabase &ivdb;
   llvm::ScalarEvolution &se;
   string indvars;
 };
 
 class PscopBuilder {
-  using RegionAnalysis = DenseMap<const llvm::Loop *, RegionInvariants>;
+  using LoopInstanceVars = DenseMap<const llvm::Loop *, LoopVariables>;
   using BBAnalysis = DenseMap<const llvm::BasicBlock *, BBInvariants>;
 
 public:
@@ -351,11 +349,11 @@ public:
         sync_blocks{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
 
   Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
-                                         RegionInvariants &invariants) {
+                                         LoopVariables &invariants) {
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
     // llvm::dbgs() << "scev dump: ";
     // scev->dump();
-    QuaffBuilder builder{invariants, invariants.ivars, scalar_evo};
+    QuaffBuilder builder{invariants, invariants, scalar_evo};
 
     auto ret = builder.visit(scev);
     return ret ? ret : Optional<QuaffExpr>{};
@@ -364,28 +362,28 @@ public:
   void build(Function &f) {
     using namespace islpp;
     // detect distribution domain of function
-    auto region_analysis = affinateRegions(f);
-    auto bb_analysis = affinateConstraints(f, region_analysis);
+    auto loop_analysis = affinateRegions(f);
+    auto bb_analysis = affinateConstraints(f, loop_analysis);
     auto instance_domain = buildDomain(f, bb_analysis);
-    auto temporal_schedule = buildSchedule(f, region_analysis, bb_analysis);
+    auto temporal_schedule = buildSchedule(f, loop_analysis, bb_analysis);
     llvm::dbgs() << "domain: " << instance_domain << "\n";
     llvm::dbgs() << "schedule: " << temporal_schedule << "\n";
     llvm::dbgs() << "time set: "
                  << apply(range(instance_domain), temporal_schedule) << "\n";
   }
 
-  RegionAnalysis affinateRegions(Function &f) {
+  LoopInstanceVars affinateRegions(Function &f) {
     using namespace islpp;
     llvm::dbgs() << "START AFFINNATE REGIONS\n";
 
-    RegionAnalysis region_analysis;
+    LoopInstanceVars loop_to_instances;
 
     // region_info.dump();
     // loop_info.print(llvm::dbgs());
 
-    region_analysis[nullptr] = ([&]() {
-      auto top_level_region_invar = RegionInvariants();
-      top_level_region_invar.ivars.addThreadIdentifier(
+    loop_to_instances[nullptr] = ([&]() {
+      auto top_level_region_invar = LoopVariables();
+      top_level_region_invar.addThreadIdentifier(
           "llvm.nvvm.read.ptx.sreg.tid.x", "tidx");
       return top_level_region_invar;
     })();
@@ -394,13 +392,14 @@ public:
       auto loop = loop_info.getLoopFor(visit);
 
       // if new loop
-      if (auto itr = region_analysis.find(loop); itr == region_analysis.end()) {
+      if (auto itr = loop_to_instances.find(loop);
+          itr == loop_to_instances.end()) {
         // setup the new loop
         auto parent_loop = loop->getParentLoop();
-        assert(region_analysis.find(parent_loop) != region_analysis.end() &&
+        assert(loop_to_instances.find(parent_loop) != loop_to_instances.end() &&
                "Parent should already be visited");
 
-        auto &parent = region_analysis.find(parent_loop)->second;
+        auto &parent = loop_to_instances.find(parent_loop)->second;
         auto invariants = parent;
 
         // are our constraints affine?
@@ -415,7 +414,7 @@ public:
           if (init_aff && fin_aff) {
             // if so, add the iteration variable into our iteration domain
             const auto loopVar = loop->getCanonicalInductionVariable();
-            invariants.ivars.addInductionVariable(loopVar);
+            invariants.addInductionVariable(loopVar);
 
             // hacky, but we will reevaluate our init and final exprs to
             // update the expression space
@@ -423,10 +422,10 @@ public:
             auto f = getQuasiaffineForm(fin, loop, invariants)->expr;
 
             // we generate an identity function for the newly added variable
-            auto ident = pw_aff{fmt::format("{{ {} -> [{}]}}",
-                                            invariants.ivars.getVector(),
-                                            invariants.ivars.getName(loopVar))};
-            invariants.ivars.addConstraint(le_set(i, ident) * lt_set(ident, f));
+            auto ident =
+                pw_aff{fmt::format("{{ {} -> [{}]}}", invariants.getVector(),
+                                   invariants.getName(loopVar))};
+            invariants.addConstraint(le_set(i, ident) * lt_set(ident, f));
 
             // [tid] : 0 <= tid <= 255
             // [tid] -> [0], [tid] -> [5]
@@ -437,14 +436,14 @@ public:
           }
         }
 
-        region_analysis.try_emplace(loop, invariants);
+        loop_to_instances.try_emplace(loop, invariants);
       }
     });
 
-    return region_analysis;
+    return loop_to_instances;
   }
 
-  BBAnalysis affinateConstraints(Function &f, RegionAnalysis &region_analysis) {
+  BBAnalysis affinateConstraints(Function &f, LoopInstanceVars &loop_analysis) {
     llvm::dbgs() << "START AFFINNATE CONSTRAINTS\n";
 
     BBAnalysis bb_analysis;
@@ -457,8 +456,8 @@ public:
     DenseMap<llvm::BasicBlock *, const llvm::BranchInst *> branching_bbs;
 
     for (auto &bb : f) {
-      bb_analysis[&bb] = BBInvariants{
-          region_analysis[loop_info.getLoopFor(&bb)].ivars.getDomain()};
+      bb_analysis[&bb] =
+          BBInvariants{loop_analysis[loop_info.getLoopFor(&bb)].getDomain()};
 
       for (auto &instr : bb) {
         if (const auto icmp = llvm::dyn_cast_or_null<llvm::ICmpInst>(&instr))
@@ -481,7 +480,7 @@ public:
     DenseMap<const llvm::ICmpInst *, islpp::set> cmp_constraints;
     for (auto [icmp, bb] : cmps) {
       auto loop = loop_info.getLoopFor(bb);
-      auto &region_inv = region_analysis[loop];
+      auto &region_inv = loop_analysis[loop];
 
       const auto lhs =
           getQuasiaffineForm(*icmp->getOperand(0), loop, region_inv);
@@ -591,11 +590,11 @@ public:
     return ret;
   }
 
-  islpp::union_map buildSchedule(Function &f, RegionAnalysis &reg_analysis,
+  islpp::union_map buildSchedule(Function &f, LoopInstanceVars &reg_analysis,
                                  BBAnalysis &bb_analysis) {
     llvm::dbgs() << "START BUILDING SCHEDULE\n";
 
-    auto distribution_domain = reg_analysis[nullptr].ivars.getDomain();
+    auto distribution_domain = reg_analysis[nullptr].getDomain();
 
     using LoopStatus = islpp::multi_aff;
 
