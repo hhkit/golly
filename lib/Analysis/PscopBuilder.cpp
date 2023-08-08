@@ -377,8 +377,8 @@ public:
     // detect distribution domain of function
     auto region_analysis = affinateRegions();
     auto bb_analysis = affinateConstraints(f, region_analysis);
-    buildSchedule(f, region_analysis, bb_analysis);
-    return;
+    auto domain = buildDomain(f, bb_analysis);
+    auto schedule = buildSchedule(f, region_analysis, bb_analysis);
   }
 
   RegionAnalysis affinateRegions() {
@@ -599,6 +599,23 @@ public:
     return bb_analysis;
   }
 
+  islpp::union_map buildDomain(Function &f, const BBAnalysis &bb_analysis) {
+    islpp::union_map ret{"{}"};
+    for (auto &[bb, invar] : bb_analysis) {
+      auto domain = invar.domain;
+
+      for (auto &sb : sync_blocks.iterateSyncBlocks(*bb)) {
+        sb.getName();
+
+        auto out = name(domain, sb.getName());
+        auto in = name(islpp::set{"{ [] }"}, sb.getName());
+
+        llvm::dbgs() << unwrap(cross(in, out)) << "\n";
+      }
+    }
+    return ret;
+  }
+
   islpp::union_map buildSchedule(Function &f, RegionAnalysis &reg_analysis,
                                  BBAnalysis &bb_analysis) {
     llvm::dbgs() << "START BUILDING SCHEDULE\n";
@@ -639,9 +656,6 @@ public:
 
         auto &loop_status = loop_setup.find(parent_loop)->second;
 
-        // auto space = get_space(clone);
-        // auto increment = space.constant<islpp::aff>(1);
-
         loop_setup.try_emplace(
             loop, LoopStatus{append_zero(project_up(loop_status.next_map))});
         loop_status.next_map = increment(loop_status.next_map);
@@ -670,8 +684,7 @@ public:
     for (auto &[bb, dom] : analysis)
       ret = ret + islpp::union_map{islpp::map{dom}};
 
-    llvm::dbgs() << ret;
-
+    llvm::dbgs() << ret << "\n";
     return ret;
   }
 
@@ -693,6 +706,7 @@ public:
           if (const auto store =
                   llvm::dyn_cast_or_null<llvm::StoreInst>(&instr)) {
             // record the write as a union set on the ptr
+            store->getNumOperands();
             // islpp::union_set;
           }
 

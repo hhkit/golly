@@ -267,6 +267,10 @@ inline set project_out(set s, dim on, initializer_list<string_view> vars) {
   return set{res};
 }
 
+inline set name(set s, string_view name) {
+  return set{isl_set_set_tuple_name(s.yield(), name.data())};
+}
+
 class map : public detail::wrap<isl_map, isl_map_copy, isl_map_free> {
 public:
   using base::base;
