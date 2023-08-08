@@ -344,7 +344,7 @@ class PscopBuilder {
 public:
   PscopBuilder(RegionInfo &ri, LoopInfo &li, ScalarEvolution &se,
                DominatorTree &dom_tree, PostDominatorTree &pdt,
-               SyncBlockDetection &sbd)
+               StatementDetection &sbd)
       : region_info{ri}, loop_info{li}, scalar_evo{se},
         sync_blocks{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
 
@@ -359,8 +359,9 @@ public:
     return ret ? ret : Optional<QuaffExpr>{};
   }
 
-  void build(Function &f) {
+  Pscop build(Function &f) {
     using namespace islpp;
+    sync_blocks.dump(llvm::dbgs());
     // detect distribution domain of function
     auto loop_analysis = affinateRegions(f);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
@@ -370,6 +371,14 @@ public:
     llvm::dbgs() << "schedule: " << temporal_schedule << "\n";
     llvm::dbgs() << "time set: "
                  << apply(range(instance_domain), temporal_schedule) << "\n";
+
+    return Pscop{
+        .instantiation_domain = instance_domain,
+        .temporal_schedule = temporal_schedule,
+        .phase_schedule = union_map{"{}"},
+        .write_access_relation = union_map("{}"),
+        .read_access_relation = union_map{"{}"},
+    };
   }
 
   LoopInstanceVars affinateRegions(Function &f) {
@@ -578,7 +587,7 @@ public:
     for (auto &[bb, invar] : bb_analysis) {
       auto domain = invar.domain;
 
-      for (auto &sb : sync_blocks.iterateSyncBlocks(*bb)) {
+      for (auto &sb : sync_blocks.iterateStatements(*bb)) {
         sb.getName();
 
         auto out = name(domain, sb.getName());
@@ -599,7 +608,7 @@ public:
     using LoopStatus = islpp::multi_aff;
 
     llvm::DenseMap<llvm::Loop *, LoopStatus> loop_setup;
-    llvm::DenseMap<golly::SyncBlock *, islpp::multi_aff> analysis;
+    llvm::DenseMap<golly::Statement *, islpp::multi_aff> analysis;
 
     // get the parent expression, dispose of the associated
     // Stmt_for_First[tidx] => [0]
@@ -627,7 +636,7 @@ public:
       // now we add ourselves to our domain
       auto &status = loop_setup.find(loop)->second;
 
-      for (auto &sb : sync_blocks.iterateSyncBlocks(*visit)) {
+      for (auto &sb : sync_blocks.iterateStatements(*visit)) {
         auto dom = status;
         dom = islpp::multi_aff{isl_multi_aff_set_tuple_name(
             dom.yield(), isl_dim_type::isl_dim_in, sb.getName().data())};
@@ -652,7 +661,7 @@ public:
       // separated by sync block
       int index = 0;
       auto bb_name = visit->getName();
-      for (auto &sync_block : sync_blocks.iterateSyncBlocks(*visit)) {
+      for (auto &sync_block : sync_blocks.iterateStatements(*visit)) {
 
         // generate statement instance
         const auto sb_name = fmt::format("{}_{}", bb_name.data(), index++);
@@ -702,7 +711,7 @@ private:
   RegionInfo &region_info;
   LoopInfo &loop_info;
   ScalarEvolution &scalar_evo;
-  SyncBlockDetection &sync_blocks;
+  StatementDetection &sync_blocks;
   DominatorTree &dom_tree;
   PostDominatorTree &post_dom;
 };
@@ -716,8 +725,7 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
                        fam.getResult<llvm::ScalarEvolutionAnalysis>(f),
                        fam.getResult<llvm::DominatorTreeAnalysis>(f),
                        fam.getResult<llvm::PostDominatorTreeAnalysis>(f),
-                       fam.getResult<golly::SyncBlockDetectionPass>(f)};
-  builder.build(f);
-  return {};
+                       fam.getResult<golly::StatementDetectionPass>(f)};
+  return builder.build(f);
 }
 } // namespace golly

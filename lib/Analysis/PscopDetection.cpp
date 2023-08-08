@@ -472,7 +472,7 @@ PscopDetectionPass::run(Function &f, FunctionAnalysisManager &am) {
 PreservedAnalyses RunPscopDetection::run(Function &f,
                                          FunctionAnalysisManager &am) {
   // am.getResult<PscopDetectionPass>(f);
-  // am.getResult<SyncBlockDetectionPass>(f).dump(llvm::dbgs());
+  // am.getResult<StatementDetectionPass>(f).dump(llvm::dbgs());
   am.getResult<PscopBuilderPass>(f);
   return PreservedAnalyses::all();
 }

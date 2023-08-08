@@ -20,7 +20,7 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
               fam.registerPass([]() { return golly::DimensionDetection(); });
               fam.registerPass([]() { return golly::PscopDetectionPass(); });
               fam.registerPass(
-                  []() { return golly::SyncBlockDetectionPass(); });
+                  []() { return golly::StatementDetectionPass(); });
               fam.registerPass([]() { return golly::PscopBuilderPass(); });
             });
 

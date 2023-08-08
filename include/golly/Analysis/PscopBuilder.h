@@ -1,7 +1,7 @@
 #ifndef GOLLY_ANALYSIS_PSCOPBUILDER_H
 #define GOLLY_ANALYSIS_PSCOPBUILDER_H
 
-#include <isl/cpp.h>
+#include <golly/Support/isl.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/PassManager.h>
 #include <memory>
@@ -25,20 +25,17 @@ using llvm::Region;
 using std::unique_ptr;
 
 struct Pscop {
-  isl_set *iteration_domain;    // a polytope representing the iterations of the
-                                // statement
-  isl_set *distribution_domain; // a polytope representing the parallelism of
-                                // the statement
+  islpp::union_map
+      instantiation_domain; // a mapping of statement to its statement instances
+  islpp::union_map temporal_schedule; // a mapping of statement instance to time
 
-  isl_map *schedule; // maps a statement instance in the iteration polytope to a
-                     // logical time
-  isl_map *phase_schedule; // maps a statement instance in the iteration
-                           // polytope to a phase point
+  islpp::union_map phase_schedule; // maps a statement instance in the iteration
+                                   // polytope to a phase point
 
-  isl_map *write_access_relation; // maps a statement instance to the set of
-                                  // writes it performs
-  isl_map *read_access_relation;  // maps a statement instance to the set of
-                                  // reads it performs
+  islpp::union_map write_access_relation; // maps a statement instance to the
+                                          // set of writes it performs
+  islpp::union_map read_access_relation; // maps a statement instance to the set
+                                         // of reads it performs
 
   // dependence relation irrelevant for race detection
 };

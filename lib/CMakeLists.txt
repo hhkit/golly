@@ -6,6 +6,7 @@ add_llvm_pass_plugin(golly MODULE
     Analysis/PscopBuilder.cpp
     Analysis/PscopDetection.cpp
     Analysis/DimensionDetection.cpp
+    Analysis/Statements.cpp
     Support/isl.cpp
     Support/isl_llvm.cpp
     Support/SCEVValidator.cpp)
