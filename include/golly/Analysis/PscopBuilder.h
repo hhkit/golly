@@ -43,7 +43,7 @@ struct Pscop {
   islpp::union_map distribution_schedule; // { StmtInst -> tid }
   islpp::union_map temporal_schedule;     // { StmtInst -> Time }
 
-  islpp::union_map phase_schedule; // tid -> StmtInst
+  islpp::union_map phase_schedule; // { tid -> StmtInst }
 
   islpp::union_map write_access_relation; // param -> { StmtInst -> Access }
   islpp::union_map read_access_relation;  // param -> { StmtInst -> Access }

@@ -39,19 +39,28 @@ using std::vector;
 
 using InductionVarSet = llvm::MapVector<const llvm::Value *, string>;
 
-namespace detail {
+// calculate based on launch parameters
+struct FunctionInvariants {
+  struct Intrinsic {
+    string llvm_symbol;
+    string alias;
+    islpp::set domain;
+  };
+  vector<Intrinsic> intrinsics;
 
+  islpp::set distribution_domain; // the domain of active threads
+  islpp::pw_aff getWarpId;
+  islpp::pw_aff getLaneId;
+};
+
+namespace detail {
 class IVarDatabase {
 public:
-  bool addThreadIdentifier(string_view intrinsic, string_view name,
-                           int max = 255) {
-    if (thread_ids.try_emplace(intrinsic, string(name)).second) {
-      domain = flat_cross(
-          domain,
-          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} <= {1} }}", name, max)});
-      return true;
-    }
-    return false;
+  void addFunctionAnalysis(const FunctionInvariants &fn_analysis) {
+    for (auto &elem : fn_analysis.intrinsics)
+      thread_ids.try_emplace(elem.llvm_symbol, elem.alias);
+
+    domain = fn_analysis.distribution_domain;
   }
 
   void addInductionVariable(const llvm::Value *val) {
@@ -135,11 +144,6 @@ struct OracleData {
   int ntid = 256;    // size of threadblock
   int ncta = 1;      // size of grid
   int warpSize = 32; // size of warp
-};
-
-// calculate based on launch parameters
-struct FunctionInvariants {
-  islpp::set distribution_domain; // the domain of active threads
 };
 
 enum class QuaffClass {
@@ -314,9 +318,9 @@ public:
           "{{ {} -> [{}] }}", ivdb.getVector(), ivdb.getName(indvar))};
 
       if (step.type != QuaffClass::CInt)
-        // loop expr is at least a loop variable, so the step must be const
-        // if step is ivar, param, or invalid, all multiplications by indvar are
-        // invalid
+        // loop expr is at least a loop variable, so the step must be
+        // const if step is ivar, param, or invalid, all multiplications
+        // by indvar are invalid
         return QuaffExpr{QuaffClass::Invalid};
 
       return QuaffExpr{QuaffClass::IVar, step.expr * loop_expr};
@@ -415,14 +419,14 @@ public:
     using namespace islpp;
     // stmt_info.dump(llvm::dbgs());
     auto fn_analysis = detectFunctionInvariants(f);
-    auto loop_analysis = affinateRegions(f);
+    auto loop_analysis = affinateRegions(f, fn_analysis);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
     auto statement_domain = buildDomain(f, bb_analysis);
     auto distribution_schedule = buildDistributionSchedule(
         statement_domain, fn_analysis, loop_analysis, bb_analysis);
 
-    auto temporal_schedule =
-        buildSchedule(f, statement_domain, loop_analysis, bb_analysis);
+    auto temporal_schedule = buildSchedule(f, fn_analysis, statement_domain,
+                                           loop_analysis, bb_analysis);
     auto sync_schedule = buildSynchronizationSchedule(
         f, fn_analysis, statement_domain, distribution_schedule,
         temporal_schedule, bb_analysis);
@@ -439,19 +443,36 @@ public:
   }
 
   FunctionInvariants detectFunctionInvariants(Function &f) {
-    return FunctionInvariants{
-        .distribution_domain = islpp::set{
-            fmt::format("{{ [{0}] : 0 <= {0} <= {1} }}", "tidx", 255)}};
+
+    auto intrinsics = vector<FunctionInvariants::Intrinsic>{
+        {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
+         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx", 256)}}};
+
+    islpp::set domain{" { [] } "};
+
+    for (auto &elem : intrinsics)
+      domain = flat_cross(domain, elem.domain);
+
+    auto warpid_getter = islpp::pw_aff{
+        fmt::format("{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", 32)};
+    auto lane_id_getter =
+        islpp::pw_aff{fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", 32)};
+
+    return FunctionInvariants{.intrinsics = intrinsics,
+                              .distribution_domain = domain,
+                              .getWarpId = warpid_getter,
+                              .getLaneId = lane_id_getter};
   }
 
-  LoopInstanceVars affinateRegions(Function &f) {
+  LoopInstanceVars affinateRegions(Function &f,
+                                   FunctionInvariants &fn_analysis) {
     using namespace islpp;
     LoopInstanceVars loop_to_instances;
 
     loop_to_instances[nullptr] = ([&]() {
       auto top_level_region_invar = LoopVariables();
-      top_level_region_invar.addThreadIdentifier(
-          "llvm.nvvm.read.ptx.sreg.tid.x", "tidx");
+      top_level_region_invar.addFunctionAnalysis(fn_analysis);
+
       for (auto &arg : f.args())
         top_level_region_invar.addInvariantLoad(&arg); // todo: globals
 
@@ -680,14 +701,12 @@ public:
     return ret;
   }
 
-  islpp::union_map buildSchedule(Function &f, islpp::union_map statement_domain,
+  islpp::union_map buildSchedule(Function &f, FunctionInvariants &fn_analysis,
+                                 islpp::union_map statement_domain,
                                  LoopInstanceVars &reg_analysis,
                                  BBAnalysis &bb_analysis) {
-    llvm::dbgs() << "START BUILDING SCHEDULE\n";
-
-    auto distribution_domain = reg_analysis[nullptr].getDomain();
-
     using LoopStatus = islpp::multi_aff;
+    const auto &distribution_domain = fn_analysis.distribution_domain;
 
     llvm::DenseMap<llvm::Loop *, LoopStatus> loop_setup;
     llvm::DenseMap<golly::Statement *, islpp::multi_aff> analysis;
@@ -742,8 +761,8 @@ public:
 
     for (auto &[visit, domain] : bb_analysis) {
 
-      // now we generate our access relations, visiting all loads and stores,
-      // separated by sync block
+      // now we generate our access relations, visiting all loads and
+      // stores, separated by sync block
       auto loop = loop_info.getLoopFor(visit);
       auto &loop_domain = loop_analysis[loop];
 
@@ -779,8 +798,6 @@ public:
       Function &f, const FunctionInvariants &fn_analysis,
       islpp::union_map statement_domain, islpp::union_map distribution_schedule,
       islpp::union_map temporal_schedule, BBAnalysis &bb_analysis) {
-    llvm::dbgs() << "START BUILDING SYNC SCHEDULE\n";
-
     islpp::union_map ret{"{}"};
 
     const auto launched_threads =
@@ -802,11 +819,12 @@ public:
 
           // retrieve the active threads in this domain
           const auto active_threads = apply(stmt_domain, distribution_schedule);
-          // llvm::dbgs() << statement.getName() << ": " << active_threads <<
+          // llvm::dbgs() << statement.getName() << ": " << active_threads
+          // <<
           // "\n";
 
-          // verify that all threads that reach this barrier CAN reach this
-          // barrier
+          // verify that all threads that reach this barrier CAN reach
+          // this barrier
           auto is_divergence_free = std::visit(
               [&](const auto &bar) -> bool {
                 if constexpr (std::is_same_v<BarrierStatement::Block,
@@ -814,11 +832,11 @@ public:
                   // if it is a block-level barrier
                   const BarrierStatement::Block &block_bar = bar;
 
-                  // every thread in the block must pass through this barrier,
-                  // no exceptions
+                  // every thread in the block must pass through this
+                  // barrier, no exceptions
 
-                  // thus, ensure that the stmt distribution domain encapsulates
-                  // all threads in the block
+                  // thus, ensure that the stmt distribution domain
+                  // encapsulates all threads in the block
                   if (launched_threads == active_threads) {
                     return true;
                   } else {
@@ -834,8 +852,8 @@ public:
                                              std::decay_t<decltype(bar)>>) {
                   // if it is a block-level barrier
                   const BarrierStatement::Warp &warp_bar = bar;
-                  // ensure that the threads that the warp is waiting for can
-                  // arrive at the warp
+                  // ensure that the threads that the warp is waiting for
+                  // can arrive at the warp
 
                   const auto waiting_lanes =
                       islpp::union_set{detail::mask_to_lane_set(warp_bar.mask)};
@@ -845,9 +863,9 @@ public:
                   if (is_empty(unreachable_lanes)) {
                     return true;
                   } else {
-                    llvm::outs()
-                        << "unreachable lanes in __syncwarps, potential branch "
-                           "divergence detected\n";
+                    llvm::outs() << "unreachable lanes in __syncwarps, "
+                                    "potential branch "
+                                    "divergence detected\n";
                     return false;
                   }
                 }
@@ -909,7 +927,9 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
                        fam.getResult<llvm::PostDominatorTreeAnalysis>(f),
                        fam.getResult<golly::StatementDetectionPass>(f)};
   auto ret = builder.build(f);
+  llvm::dbgs() << "pscop for " << f.getName() << ": {\n";
   ret.dump(llvm::dbgs());
+  llvm::dbgs() << "}\n";
   return ret;
 }
 } // namespace golly
