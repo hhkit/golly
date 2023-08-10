@@ -10,7 +10,8 @@ using InstListType = SymbolTableList<Instruction>;
 using const_iterator = InstListType::const_iterator;
 static llvm::StringSet warp_instructions{
     "llvm.nvvm.bar.warp.sync",
-    "_Z10__syncwarpj" // TODO: better way of detecting this
+    "_Z10__syncwarpj" // TODO: better way of detecting this - maybe
+                      // canonicalize?
 };
 static llvm::StringSet block_instructions{
     "llvm.nvvm.barrier0",

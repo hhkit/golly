@@ -49,9 +49,9 @@ struct Pscop {
   islpp::union_map read_access_relation;  // param -> { StmtInst -> Access }
 
   // dependence relation irrelevant for race detection
-
-  void dump(llvm::raw_ostream &) const;
 };
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Pscop &);
 
 class PscopBuilderPass : public AnalysisInfoMixin<PscopBuilderPass> {
 public:

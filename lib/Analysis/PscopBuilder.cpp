@@ -1,6 +1,7 @@
 #include <fmt/format.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/StatementDetection.h>
+#include <golly/Support/Traversal.h>
 #include <golly/Support/isl_llvm.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/MapVector.h>
@@ -15,8 +16,6 @@
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Instructions.h>
-#include <queue>
-#include <stack>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,8 +30,6 @@ using llvm::PostDominatorTree;
 using llvm::RegionInfo;
 using llvm::ScalarEvolution;
 
-using std::queue;
-using std::stack;
 using std::string;
 using std::string_view;
 using std::vector;
@@ -168,13 +165,14 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
   return o << e.expr;
 }
 
-void Pscop::dump(llvm::raw_ostream &os) const {
-  os << "domain:\n  " << instantiation_domain << "\n";
-  os << "distribution_schedule:\n  " << distribution_schedule << "\n";
-  os << "temporal_schedule:\n  " << temporal_schedule << "\n";
-  os << "sync_schedule:\n  " << phase_schedule << "\n";
-  os << "writes:\n  " << write_access_relation << "\n";
-  os << "reads:\n  " << read_access_relation << "\n";
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Pscop &pscop) {
+  os << "domain:\n  " << pscop.instantiation_domain << "\n";
+  os << "distribution_schedule:\n  " << pscop.distribution_schedule << "\n";
+  os << "temporal_schedule:\n  " << pscop.temporal_schedule << "\n";
+  os << "sync_schedule:\n  " << pscop.phase_schedule << "\n";
+  os << "writes:\n  " << pscop.write_access_relation << "\n";
+  os << "reads:\n  " << pscop.read_access_relation << "\n";
+  return os;
 }
 
 using LoopVariables = detail::IVarDatabase;
@@ -886,27 +884,6 @@ public:
     return ret;
   }
 
-  template <typename T> void bfs(llvm::BasicBlock *first, T &&fn) {
-    queue<llvm::BasicBlock *> queue;
-    llvm::DenseSet<llvm::BasicBlock *> visited;
-    queue.push(first);
-    visited.insert(first);
-
-    while (!queue.empty()) {
-      auto visit = queue.front();
-      queue.pop();
-
-      fn(visit);
-
-      for (auto &&child : successors(visit)) {
-        if (!visited.contains(child)) {
-          queue.push(child);
-          visited.insert(child);
-        }
-      }
-    }
-  }
-
 private:
   RegionInfo &region_info;
   LoopInfo &loop_info;
@@ -927,9 +904,7 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
                        fam.getResult<llvm::PostDominatorTreeAnalysis>(f),
                        fam.getResult<golly::StatementDetectionPass>(f)};
   auto ret = builder.build(f);
-  llvm::dbgs() << "pscop for " << f.getName() << ": {\n";
-  ret.dump(llvm::dbgs());
-  llvm::dbgs() << "}\n";
+  llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
   return ret;
 }
 } // namespace golly
