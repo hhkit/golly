@@ -858,7 +858,7 @@ public:
           // thus, this barrier works
           if (is_divergence_free) {
             ret = ret +
-                  range_subtract(reverse(distribution_schedule), stmt_domain);
+                  reverse(domain_subtract(distribution_schedule, stmt_domain));
           }
         }
       }
