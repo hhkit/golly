@@ -674,6 +674,7 @@ public:
     }
     return ret;
   }
+
   islpp::union_map buildDistributionSchedule(
       islpp::union_map statement_domain, const FunctionInvariants &fn_analysis,
       LoopInstanceVars &liv, const BBAnalysis &bb_analysis) {
@@ -817,9 +818,11 @@ public:
 
           // retrieve the active threads in this domain
           const auto active_threads = apply(stmt_domain, distribution_schedule);
-          // llvm::dbgs() << statement.getName() << ": " << active_threads
-          // <<
-          // "\n";
+
+          if (is_empty(active_threads)) {
+            llvm::outs() << "warning: unreachable block-level barrier\n";
+            continue;
+          }
 
           // verify that all threads that reach this barrier CAN reach
           // this barrier
