@@ -2,6 +2,7 @@
 #include <golly/Analysis/Statements.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/Support/Debug.h>
 namespace golly {
 
 namespace detail {
@@ -12,11 +13,11 @@ static llvm::StringSet warp_instructions{
     "_Z10__syncwarpj" // TODO: better way of detecting this
 };
 static llvm::StringSet block_instructions{
-    "llvm.nvvm.bar.warp.sync",
-    "_Z10__syncwarpj" // TODO: better way of detecting this
+    "llvm.nvvm.barrier0",
 };
 
-template <typename... Ts> auto make_create_statement_lut(type_list<Ts...>) {
+template <typename... Ts>
+constexpr auto make_create_statement_lut(type_list<Ts...>) {
   using CreateTy = unique_ptr<Statement>(const StatementConfig &);
   return std::array<CreateTy *, sizeof...(Ts) + 1>{
       ([](const StatementConfig &cfg) {
@@ -43,7 +44,7 @@ createBarrierMetadata(const llvm::Instruction &barrier_instr) {
   const auto fn_name = as_fn->getCalledFunction()->getName();
 
   if (warp_instructions.contains(fn_name)) {
-    assert(as_fn->getCalledFunction()->getNumOperands() == 1 &&
+    assert(as_fn->getCalledFunction()->arg_size() == 1 &&
            "warp barrier should always have a mask");
     auto mask = as_fn->getArgOperand(0);
 
@@ -65,7 +66,7 @@ bool Statement::isStatementDivider(const llvm::Instruction &instr) {
 
 unique_ptr<Statement> Statement::create(unsigned index,
                                         const StatementConfig &cfg) {
-  static auto lut = detail::make_create_statement_lut(StatementTypes{});
+  constexpr auto lut = detail::make_create_statement_lut(StatementTypes{});
 
   return lut[index](cfg);
 }
@@ -82,7 +83,8 @@ bool BarrierStatement::isDivider(const llvm::Instruction &instr) {
     return llvm::isa<llvm::ReturnInst>(instr);
 
   if (const auto called_fn = as_fn->getCalledFunction()) {
-    return detail::warp_instructions.contains(called_fn->getName());
+    return detail::warp_instructions.contains(called_fn->getName()) ||
+           detail::block_instructions.contains(called_fn->getName());
   }
   return false;
 }

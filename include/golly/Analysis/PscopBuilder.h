@@ -8,26 +8,23 @@
 #include <memory>
 
 namespace llvm {
-class Region;
 class Function;
-class RegionInfo;
-class ScalarEvolution;
 } // namespace llvm
 
 namespace golly {
 
 using llvm::AnalysisInfoMixin;
 using llvm::AnalysisKey;
-using llvm::DenseMap;
 using llvm::Function;
 using llvm::FunctionAnalysisManager;
-using llvm::Region;
 
 using std::unique_ptr;
 
 struct Pscop {
   islpp::union_map
       instantiation_domain; // a mapping of statement to its statement instances
+  islpp::union_map distribution_schedule; // a mapping of statement instances to
+                                          // the thread IDs involved
   islpp::union_map temporal_schedule; // a mapping of statement instance to time
 
   islpp::union_map phase_schedule; // maps a statement instance in the iteration

@@ -30,6 +30,7 @@ using llvm::Optional;
 using llvm::PostDominatorTree;
 using llvm::RegionInfo;
 using llvm::ScalarEvolution;
+
 using std::queue;
 using std::stack;
 using std::string;
@@ -118,7 +119,21 @@ private:
   int id = 0;
 };
 
+islpp::set mask_to_lane_set(unsigned mask) {
+  islpp::set lanes{"{ [lid] : 0 <= lid <= 31 }"};
+  for (int i = 0; i < 32; ++i) {
+    if ((mask & (1 << i)) == 0) { // bitmask disabled
+      lanes = lanes - islpp::set{fmt::format("{{[ {} ]}}", i)};
+    }
+  }
+  return lanes;
+}
+
 } // namespace detail
+
+struct FunctionInvariants {
+  islpp::set distribution_domain; // the domain of active threads
+};
 
 enum class QuaffClass {
   CInt,  // compile-time constant integer
@@ -144,6 +159,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
 
 void Pscop::dump(llvm::raw_ostream &os) const {
   os << "domain: " << instantiation_domain << "\n";
+  os << "distribution_schedule: " << distribution_schedule << "\n";
   os << "temporal_schedule: " << temporal_schedule << "\n";
   os << "sync_schedule: " << phase_schedule << "\n";
   os << "writes: " << write_access_relation << "\n";
@@ -169,6 +185,7 @@ struct BBInvariants {
       domain = domain - constraint;
   }
 };
+
 struct AccessRelations {
   islpp::union_map reads;
   islpp::union_map writes;
@@ -390,22 +407,32 @@ public:
   Pscop build(Function &f) {
     using namespace islpp;
     // stmt_info.dump(llvm::dbgs());
-    // detect distribution domain of function
+    auto fn_analysis = detectFunctionInvariants(f);
     auto loop_analysis = affinateRegions(f);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
     auto statement_domain = buildDomain(f, bb_analysis);
+    auto distribution_schedule = buildDistributionSchedule(
+        statement_domain, fn_analysis, loop_analysis, bb_analysis);
+
     auto temporal_schedule = buildSchedule(f, loop_analysis, bb_analysis);
-    auto sync_schedule =
-        buildSynchronizationSchedule(f, statement_domain, bb_analysis);
+    auto sync_schedule = buildSynchronizationSchedule(
+        f, fn_analysis, statement_domain, distribution_schedule, bb_analysis);
     auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
 
     return Pscop{
         .instantiation_domain = statement_domain,
+        .distribution_schedule = distribution_schedule,
         .temporal_schedule = temporal_schedule,
         .phase_schedule = sync_schedule,
         .write_access_relation = std::move(access_relations.writes),
         .read_access_relation = std::move(access_relations.reads),
     };
+  }
+
+  FunctionInvariants detectFunctionInvariants(Function &f) {
+    return FunctionInvariants{
+        .distribution_domain = islpp::set{
+            fmt::format("{{ [{0}] : 0 <= {0} <= {1} }}", "tidx", 255)}};
   }
 
   LoopInstanceVars affinateRegions(Function &f) {
@@ -611,14 +638,36 @@ public:
       auto domain = invar.domain;
 
       for (auto &sb : stmt_info.iterateStatements(*bb)) {
-        sb.getName();
-
         auto out = name(domain, sb.getName());
         auto in = name(islpp::set{"{ [] }"}, sb.getName());
 
         ret = ret + islpp::union_map{unwrap(cross(in, out))};
       }
     }
+    return ret;
+  }
+  islpp::union_map buildDistributionSchedule(
+      islpp::union_map statement_domain, const FunctionInvariants &fn_analysis,
+      LoopInstanceVars &liv, const BBAnalysis &bb_analysis) {
+    islpp::union_map ret{"{}"};
+
+    auto distribution_domain = fn_analysis.distribution_domain;
+    auto map_template = identity(distribution_domain);
+
+    const auto old_dims = dims(distribution_domain, islpp::dim::in);
+    for (auto &[bb, invar] : bb_analysis) {
+      const auto new_dims = dims(invar.domain, islpp::dim::in);
+
+      auto dimension_corrected =
+          add_dims(map_template, islpp::dim::in, new_dims - old_dims);
+      for (auto &stmt : stmt_info.iterateStatements(*bb)) {
+        ret = ret + islpp::union_map(
+                        name(map_template, islpp::dim::in, stmt.getName()));
+      }
+    }
+
+    // restrict to the invocations that actually exist
+    ret = domain_subtract(ret, range(statement_domain));
     return ret;
   }
 
@@ -714,31 +763,83 @@ public:
     };
   }
 
-  islpp::union_map
-  buildSynchronizationSchedule(Function &f, islpp::union_map statement_domain,
-                               BBAnalysis &bb_analysis) {
+  islpp::union_map buildSynchronizationSchedule(
+      Function &f, const FunctionInvariants &fn_analysis,
+      islpp::union_map statement_domain, islpp::union_map distribution_schedule,
+      BBAnalysis &bb_analysis) {
     llvm::dbgs() << "START BUILDING SYNC SCHEDULE\n";
 
     islpp::union_map ret{"{}"};
 
+    const auto launched_threads =
+        islpp::union_set{fn_analysis.distribution_domain};
     // ok let's do this one last time
     for (auto &[visit, domain] : bb_analysis) {
       auto loop = loop_info.getLoopFor(visit);
 
       for (auto &statement : stmt_info.iterateStatements(*visit)) {
-        auto stmt_set =
+        const auto stmt_set =
             islpp::union_set{name(islpp::set("{ [] }"), statement.getName())};
 
-        auto stmt_domain = apply(stmt_set, statement_domain);
+        // the statement invocations in this domain
+        const auto stmt_domain = apply(stmt_set, statement_domain);
+
         // if we are a barrier...
         if (const auto barrier = statement.as<golly::BarrierStatement>()) {
           // do barrier stuff
-          llvm::dbgs() << stmt_domain << "\n";
 
-          // before processing the barrier,
+          // retrieve the active threads in this domain
+          const auto active_threads = apply(stmt_domain, distribution_schedule);
+          llvm::dbgs() << statement.getName() << ": " << active_threads << "\n";
+
           // verify that all threads that reach this barrier CAN reach this
           // barrier
+          auto barrier_validates = std::visit(
+              [&](const auto &bar) -> bool {
+                if constexpr (std::is_same_v<BarrierStatement::Block,
+                                             std::decay_t<decltype(bar)>>) {
+                  // if it is a block-level barrier
+                  const BarrierStatement::Block &block_bar = bar;
 
+                  // every thread in the block must pass through this barrier,
+                  // no exceptions
+
+                  // thus, ensure that the stmt distribution domain encapsulates
+                  // all threads in the block
+                  if (launched_threads == active_threads) {
+                    return true;
+                  } else {
+                    llvm::outs() << "unreachable lanes in __syncthreads, "
+                                    "potential branch divergence detected\n";
+                    return false;
+                  }
+                }
+
+                if constexpr (std::is_same_v<BarrierStatement::Warp,
+                                             std::decay_t<decltype(bar)>>) {
+                  // if it is a block-level barrier
+                  const BarrierStatement::Warp &warp_bar = bar;
+                  // ensure that the threads that the warp is waiting for can
+                  // arrive at the warp
+
+                  const auto waiting_lanes =
+                      islpp::union_set{detail::mask_to_lane_set(warp_bar.mask)};
+                  const auto active_lanes = waiting_lanes;
+                  const auto unreachable_lanes = active_lanes - waiting_lanes;
+
+                  if (is_empty(unreachable_lanes)) {
+                    return true;
+                  } else {
+                    llvm::outs()
+                        << "unreachable lanes in __syncwarps, potential branch "
+                           "divergence detected\n";
+                    return false;
+                  }
+                }
+                return true;
+              },
+              barrier->getBarrier());
+          // no thread divergence detected
           // first, generate all threads that can reach this statement
           // this means projecting out all ivars
         }

@@ -296,13 +296,24 @@ public:
   }
 };
 
+DIMS(map)
+
 inline map name(map m, dim on, string_view name) {
   return map{isl_map_set_tuple_name(m.yield(), static_cast<isl_dim_type>(on),
                                     name.data())};
 }
 
+inline map add_dims(map m, dim on, int count) {
+  auto old_dim = dims(m, on);
+  auto new_map =
+      isl_map_add_dims(m.yield(), static_cast<isl_dim_type>(on), count);
+
+  return map{new_map};
+}
+
 SET_OPERATORS(map)
 CLOSED_UNOP(map, operator-, isl_map_neg);
+OPEN_UNOP(map, set, identity, isl_set_identity);
 MAP_OPERATORS(map, set);
 
 CLOSED_BINOP(map, flat_cross, isl_map_flat_product);

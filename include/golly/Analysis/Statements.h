@@ -95,7 +95,7 @@ public:
   BarrierStatement(const StatementConfig &rhs);
   static bool isDivider(const llvm::Instruction &);
   string_view getSuffix() const { return "Sync."; }
-  const Barrier &getBarrier() const;
+  const Barrier &getBarrier() const { return barrier_; }
 
   int getMask() const;
 
