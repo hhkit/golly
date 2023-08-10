@@ -131,6 +131,13 @@ islpp::set mask_to_lane_set(unsigned mask) {
 
 } // namespace detail
 
+struct OracleData {
+  int ntid = 256;    // size of threadblock
+  int ncta = 1;      // size of grid
+  int warpSize = 32; // size of warp
+};
+
+// calculate based on launch parameters
 struct FunctionInvariants {
   islpp::set distribution_domain; // the domain of active threads
 };
@@ -158,12 +165,12 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
 }
 
 void Pscop::dump(llvm::raw_ostream &os) const {
-  os << "domain: " << instantiation_domain << "\n";
-  os << "distribution_schedule: " << distribution_schedule << "\n";
-  os << "temporal_schedule: " << temporal_schedule << "\n";
-  os << "sync_schedule: " << phase_schedule << "\n";
-  os << "writes: " << write_access_relation << "\n";
-  os << "reads: " << read_access_relation << "\n";
+  os << "domain:\n  " << instantiation_domain << "\n";
+  os << "distribution_schedule:\n  " << distribution_schedule << "\n";
+  os << "temporal_schedule:\n  " << temporal_schedule << "\n";
+  os << "sync_schedule:\n  " << phase_schedule << "\n";
+  os << "writes:\n  " << write_access_relation << "\n";
+  os << "reads:\n  " << read_access_relation << "\n";
 }
 
 using LoopVariables = detail::IVarDatabase;
@@ -414,9 +421,11 @@ public:
     auto distribution_schedule = buildDistributionSchedule(
         statement_domain, fn_analysis, loop_analysis, bb_analysis);
 
-    auto temporal_schedule = buildSchedule(f, loop_analysis, bb_analysis);
+    auto temporal_schedule =
+        buildSchedule(f, statement_domain, loop_analysis, bb_analysis);
     auto sync_schedule = buildSynchronizationSchedule(
-        f, fn_analysis, statement_domain, distribution_schedule, bb_analysis);
+        f, fn_analysis, statement_domain, distribution_schedule,
+        temporal_schedule, bb_analysis);
     auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
 
     return Pscop{
@@ -671,7 +680,8 @@ public:
     return ret;
   }
 
-  islpp::union_map buildSchedule(Function &f, LoopInstanceVars &reg_analysis,
+  islpp::union_map buildSchedule(Function &f, islpp::union_map statement_domain,
+                                 LoopInstanceVars &reg_analysis,
                                  BBAnalysis &bb_analysis) {
     llvm::dbgs() << "START BUILDING SCHEDULE\n";
 
@@ -720,7 +730,9 @@ public:
     islpp::union_map ret{"{}"};
     for (auto &[bb, dom] : analysis)
       ret = ret + islpp::union_map{islpp::map{dom}};
-    return ret;
+
+    // trim invalid values
+    return domain_subtract(ret, range(statement_domain));
   }
 
   AccessRelations buildAccessRelations(LoopInstanceVars &loop_analysis,
@@ -766,14 +778,14 @@ public:
   islpp::union_map buildSynchronizationSchedule(
       Function &f, const FunctionInvariants &fn_analysis,
       islpp::union_map statement_domain, islpp::union_map distribution_schedule,
-      BBAnalysis &bb_analysis) {
+      islpp::union_map temporal_schedule, BBAnalysis &bb_analysis) {
     llvm::dbgs() << "START BUILDING SYNC SCHEDULE\n";
 
     islpp::union_map ret{"{}"};
 
     const auto launched_threads =
         islpp::union_set{fn_analysis.distribution_domain};
-    // ok let's do this one last time
+
     for (auto &[visit, domain] : bb_analysis) {
       auto loop = loop_info.getLoopFor(visit);
 
@@ -790,11 +802,12 @@ public:
 
           // retrieve the active threads in this domain
           const auto active_threads = apply(stmt_domain, distribution_schedule);
-          llvm::dbgs() << statement.getName() << ": " << active_threads << "\n";
+          // llvm::dbgs() << statement.getName() << ": " << active_threads <<
+          // "\n";
 
           // verify that all threads that reach this barrier CAN reach this
           // barrier
-          auto barrier_validates = std::visit(
+          auto is_divergence_free = std::visit(
               [&](const auto &bar) -> bool {
                 if constexpr (std::is_same_v<BarrierStatement::Block,
                                              std::decay_t<decltype(bar)>>) {
@@ -810,7 +823,9 @@ public:
                     return true;
                   } else {
                     llvm::outs() << "unreachable lanes in __syncthreads, "
-                                    "potential branch divergence detected\n";
+                                    "potential branch divergence detected\n"
+                                 << launched_threads - active_threads
+                                 << " are unreachable.\n";
                     return false;
                   }
                 }
@@ -839,18 +854,21 @@ public:
                 return true;
               },
               barrier->getBarrier());
-          // no thread divergence detected
-          // first, generate all threads that can reach this statement
-          // this means projecting out all ivars
+
+          // thus, this barrier works
+          if (is_divergence_free) {
+            ret = ret +
+                  range_subtract(reverse(distribution_schedule), stmt_domain);
+          }
         }
       }
     }
 
+    // now we have all valid syncs
     return ret;
   }
 
   template <typename T> void bfs(llvm::BasicBlock *first, T &&fn) {
-
     queue<llvm::BasicBlock *> queue;
     llvm::DenseSet<llvm::BasicBlock *> visited;
     queue.push(first);

@@ -97,8 +97,6 @@ public:
   string_view getSuffix() const { return "Sync."; }
   const Barrier &getBarrier() const { return barrier_; }
 
-  int getMask() const;
-
 private:
   Barrier barrier_;
 };
