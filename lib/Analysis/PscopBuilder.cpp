@@ -441,20 +441,22 @@ public:
   }
 
   FunctionInvariants detectFunctionInvariants(Function &f) {
+    OracleData oracle;
 
     auto intrinsics = vector<FunctionInvariants::Intrinsic>{
         {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
-         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx", 256)}}};
+         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx",
+                                oracle.ntid)}}};
 
     islpp::set domain{" { [] } "};
 
     for (auto &elem : intrinsics)
       domain = flat_cross(domain, elem.domain);
 
-    auto warpid_getter = islpp::pw_aff{
-        fmt::format("{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", 32)};
-    auto lane_id_getter =
-        islpp::pw_aff{fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", 32)};
+    auto warpid_getter = islpp::pw_aff{fmt::format(
+        "{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", oracle.warpSize)};
+    auto lane_id_getter = islpp::pw_aff{
+        fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", oracle.warpSize)};
 
     return FunctionInvariants{.intrinsics = intrinsics,
                               .distribution_domain = domain,
@@ -820,7 +822,7 @@ public:
           const auto active_threads = apply(stmt_domain, distribution_schedule);
 
           if (is_empty(active_threads)) {
-            llvm::outs() << "warning: unreachable block-level barrier\n";
+            llvm::outs() << "warning: unreachable barrier\n";
             continue;
           }
 
@@ -874,8 +876,8 @@ public:
               },
               barrier->getBarrier());
 
-          // thus, this barrier works
           if (is_divergence_free) {
+            // thus, this barrier works
             ret = ret +
                   reverse(domain_subtract(distribution_schedule, stmt_domain));
           }
@@ -910,4 +912,10 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
   llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
   return ret;
 }
+
+PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
+  fam.getResult<golly::PscopBuilderPass>(f);
+  return PreservedAnalyses::all();
+}
+
 } // namespace golly
