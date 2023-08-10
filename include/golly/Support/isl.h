@@ -224,6 +224,15 @@ public:
   using base::base;
 
   set(string_view isl);
+
+  explicit operator union_set() const & {
+
+    return union_set{isl_union_set_from_set(set{*this}.yield())};
+  }
+  explicit operator union_set() && {
+
+    return union_set{isl_union_set_from_set(yield())};
+  }
 };
 
 SET_OPERATORS(set)

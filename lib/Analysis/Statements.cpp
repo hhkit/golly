@@ -7,19 +7,55 @@ namespace golly {
 namespace detail {
 using InstListType = SymbolTableList<Instruction>;
 using const_iterator = InstListType::const_iterator;
+static llvm::StringSet warp_instructions{
+    "llvm.nvvm.bar.warp.sync",
+    "_Z10__syncwarpj" // TODO: better way of detecting this
+};
+static llvm::StringSet block_instructions{
+    "llvm.nvvm.bar.warp.sync",
+    "_Z10__syncwarpj" // TODO: better way of detecting this
+};
 
 template <typename... Ts> auto make_create_statement_lut(type_list<Ts...>) {
-  using CreateTy = unique_ptr<Statement>(const BasicBlock *bb, const_iterator b,
-                                         const_iterator e, string_view name);
+  using CreateTy = unique_ptr<Statement>(const StatementConfig &);
   return std::array<CreateTy *, sizeof...(Ts) + 1>{
-      (+[](const BasicBlock *bb, const_iterator b, const_iterator e,
-           string_view name) {
-        return unique_ptr<Statement>(new Ts(bb, b, e, name));
+      ([](const StatementConfig &cfg) {
+        return unique_ptr<Statement>(new Ts(cfg));
       })...,
-      (+[](const BasicBlock *bb, const_iterator b, const_iterator e,
-           string_view name) {
-        return unique_ptr<Statement>(new Statement(bb, b, e, name));
+      ([](const StatementConfig &cfg) {
+        return unique_ptr<Statement>(new Statement(cfg));
       })};
+}
+
+BarrierStatement::Barrier
+createBarrierMetadata(const llvm::Instruction &barrier_instr) {
+  const auto as_fn = llvm::dyn_cast_or_null<llvm::CallInst>(&barrier_instr);
+
+  if (!as_fn) {
+    const auto as_ret =
+        llvm::dyn_cast_or_null<llvm::ReturnInst>(&barrier_instr);
+    if (as_ret)
+      return BarrierStatement::End{};
+  }
+
+  assert(as_fn && "defining instruction should be at least an intrinsic call");
+
+  const auto fn_name = as_fn->getCalledFunction()->getName();
+
+  if (warp_instructions.contains(fn_name)) {
+    assert(as_fn->getCalledFunction()->getNumOperands() == 1 &&
+           "warp barrier should always have a mask");
+    auto mask = as_fn->getArgOperand(0);
+
+    // retrieve mask
+    return BarrierStatement::Warp{};
+  }
+
+  if (block_instructions.contains(fn_name)) {
+    return BarrierStatement::Block();
+  }
+
+  return BarrierStatement::Block{};
 }
 } // namespace detail
 
@@ -27,17 +63,18 @@ bool Statement::isStatementDivider(const llvm::Instruction &instr) {
   return detail::dividerIndex(instr) != StatementTypes::length;
 }
 
-unique_ptr<Statement> Statement::create(unsigned index, const BasicBlock *bb,
-                                        const_iterator b, const_iterator e,
-                                        string_view name) {
+unique_ptr<Statement> Statement::create(unsigned index,
+                                        const StatementConfig &cfg) {
   static auto lut = detail::make_create_statement_lut(StatementTypes{});
 
-  return lut[index](bb, b, e, name);
+  return lut[index](cfg);
 }
 
+BarrierStatement::BarrierStatement(const StatementConfig &cfg)
+    : Base{cfg}, barrier_{
+                     detail::createBarrierMetadata(getDefiningInstruction())} {}
+
 bool BarrierStatement::isDivider(const llvm::Instruction &instr) {
-  static llvm::StringSet barrier_instructions{"llvm.nvvm.bar.warp.sync",
-                                              "_Z10__syncwarpj"};
 
   auto as_fn = llvm::dyn_cast_or_null<llvm::CallInst>(&instr);
 
@@ -45,7 +82,7 @@ bool BarrierStatement::isDivider(const llvm::Instruction &instr) {
     return llvm::isa<llvm::ReturnInst>(instr);
 
   if (const auto called_fn = as_fn->getCalledFunction()) {
-    return barrier_instructions.contains(called_fn->getName());
+    return detail::warp_instructions.contains(called_fn->getName());
   }
   return false;
 }
@@ -89,10 +126,11 @@ const llvm::Value *MemoryAccessStatement::getPointerOperand() const {
   return nullptr;
 }
 
-Statement::Statement(const BasicBlock *bb, const_iterator b, const_iterator e,
-                     string_view name)
-    : bb_{bb}, beg_{b}, end_{e}, name{name} {
+Statement::Statement(const StatementConfig &cfg)
+    : bb_{cfg.bb}, beg_{cfg.begin}, end_{cfg.end}, name{cfg.name} {
   assert((beg_ != end_) && "No trivial statements");
+  auto b = cfg.begin;
+  auto e = cfg.end;
   for (last_ = b++; b != e; ++last_, ++b)
     ;
 }

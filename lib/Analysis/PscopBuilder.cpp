@@ -374,6 +374,8 @@ public:
       : region_info{ri}, loop_info{li},
         scalar_evo{se}, stmt_info{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
 
+  // take in value by non-const because the SCEV guy doesn't know what const
+  // correctness is
   Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
                                          LoopVariables &invariants) {
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
@@ -391,14 +393,16 @@ public:
     // detect distribution domain of function
     auto loop_analysis = affinateRegions(f);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
-    auto instance_domain = buildDomain(f, bb_analysis);
+    auto statement_domain = buildDomain(f, bb_analysis);
     auto temporal_schedule = buildSchedule(f, loop_analysis, bb_analysis);
+    auto sync_schedule =
+        buildSynchronizationSchedule(f, statement_domain, bb_analysis);
     auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
 
     return Pscop{
-        .instantiation_domain = instance_domain,
+        .instantiation_domain = statement_domain,
         .temporal_schedule = temporal_schedule,
-        .phase_schedule = union_map{"{}"},
+        .phase_schedule = sync_schedule,
         .write_access_relation = std::move(access_relations.writes),
         .read_access_relation = std::move(access_relations.reads),
     };
@@ -708,6 +712,40 @@ public:
         .reads = std::move(reads),
         .writes = std::move(writes),
     };
+  }
+
+  islpp::union_map
+  buildSynchronizationSchedule(Function &f, islpp::union_map statement_domain,
+                               BBAnalysis &bb_analysis) {
+    llvm::dbgs() << "START BUILDING SYNC SCHEDULE\n";
+
+    islpp::union_map ret{"{}"};
+
+    // ok let's do this one last time
+    for (auto &[visit, domain] : bb_analysis) {
+      auto loop = loop_info.getLoopFor(visit);
+
+      for (auto &statement : stmt_info.iterateStatements(*visit)) {
+        auto stmt_set =
+            islpp::union_set{name(islpp::set("{ [] }"), statement.getName())};
+
+        auto stmt_domain = apply(stmt_set, statement_domain);
+        // if we are a barrier...
+        if (const auto barrier = statement.as<golly::BarrierStatement>()) {
+          // do barrier stuff
+          llvm::dbgs() << stmt_domain << "\n";
+
+          // before processing the barrier,
+          // verify that all threads that reach this barrier CAN reach this
+          // barrier
+
+          // first, generate all threads that can reach this statement
+          // this means projecting out all ivars
+        }
+      }
+    }
+
+    return ret;
   }
 
   template <typename T> void bfs(llvm::BasicBlock *first, T &&fn) {

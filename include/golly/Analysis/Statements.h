@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <variant>
 
 namespace golly {
 using llvm::BasicBlock;
@@ -15,17 +16,26 @@ using llvm::SymbolTableList;
 using std::string;
 using std::string_view;
 using std::unique_ptr;
+using std::variant;
 
 using StatementTypes =
     detail::type_list<class BarrierStatement, class MemoryAccessStatement>;
+
+struct StatementConfig {
+  using InstListType = SymbolTableList<Instruction>;
+  using const_iterator = InstListType::const_iterator;
+
+  const BasicBlock *bb;
+  const_iterator begin, end;
+  string_view name;
+};
 
 class Statement {
 public:
   using InstListType = SymbolTableList<Instruction>;
   using const_iterator = InstListType::const_iterator;
 
-  Statement(const BasicBlock *bb, const_iterator b, const_iterator e,
-            string_view name);
+  Statement(const StatementConfig &);
   virtual ~Statement() = default;
 
   void addSuccessor(unique_ptr<Statement> child);
@@ -49,9 +59,7 @@ public:
   const BasicBlock *getBlock() const { return bb_; }
 
   static bool isStatementDivider(const Instruction &instr);
-  static unique_ptr<Statement> create(unsigned index, const BasicBlock *bb,
-                                      const_iterator b, const_iterator e,
-                                      string_view name);
+  static unique_ptr<Statement> create(unsigned index, const StatementConfig &);
 
 protected:
   const Instruction &getDefiningInstruction() const { return *last_; }
@@ -76,10 +84,23 @@ public:
 // this statement contains a barrier
 class BarrierStatement : public BaseStatement<BarrierStatement> {
 public:
-  using Base::Base;
+  struct Warp {
+    unsigned mask = -1;
+  };
+  struct Block {};
+  struct End {};
 
+  using Barrier = variant<Warp, Block, End>;
+
+  BarrierStatement(const StatementConfig &rhs);
   static bool isDivider(const llvm::Instruction &);
   string_view getSuffix() const { return "Sync."; }
+  const Barrier &getBarrier() const;
+
+  int getMask() const;
+
+private:
+  Barrier barrier_;
 };
 
 // this statement contains a memory access
