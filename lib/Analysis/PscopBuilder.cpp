@@ -414,10 +414,7 @@ public:
     }
 
     auto lanes = apply_range(active_threads, get_lane_id); // StmtInst -> lids
-    llvm::dbgs() << "lanes: " << lanes << "\n";
-    llvm::dbgs() << "masks: " << masks << "\n";
-    auto masked_lanes = range_subtract(lanes, masks); // StmtInst -> lids
-    llvm::dbgs() << "masked: " << masked_lanes << "\n";
+    auto masked_lanes = range_subtract(lanes, masks);      // StmtInst -> lids
 
     return islpp::domain_subtract(
         active_threads,
@@ -976,14 +973,9 @@ public:
                                        "and 0 <= lid2 < 32}"};
 
                   const auto wls_same_warp = wl_pairs - different_warps;
-                  llvm::dbgs() << wls_same_warp << "\n";
                   const auto wl_to_tid = reverse(warp_lane_expr);
                   const auto threads_same_warp = apply_range(
                       apply_domain(wls_same_warp, wl_to_tid), wl_to_tid);
-
-                  // llvm::dbgs() << "bar: " << barrier->getName() << "\n";
-                  // llvm::dbgs() << active_warps << "\n";
-                  // llvm::dbgs() << "waiting:" << waiting_lanes << "\n";
 
                   //  2. the mask accepts both lanes
                   // note that mask is instanced on statements, not enough to go
@@ -1002,15 +994,8 @@ public:
                     return islpp::union_map{"{}"};
                   }
 
-                  llvm::dbgs() << "same threads: " << threads_same_warp << "\n";
-                  llvm::dbgs() << "waiting: " << waiting_lanes << "\n";
-
                   auto statement_syncs =
                       apply_domain(*waiting_lanes, temporal_schedule);
-                  llvm::dbgs() << "syncs: "
-                               << reverse(range_product(statement_syncs,
-                                                        statement_syncs))
-                               << "\n";
 
                   return domain_subtract(
                       reverse(range_product(statement_syncs, statement_syncs)),
@@ -1032,6 +1017,15 @@ public:
     }
 
     // now we have all valid syncs
+    if (0) {
+      // test bed
+
+      islpp::union_set try01{"{ [[0] -> [1]]}"};
+      islpp::union_set try0N{"{ [[0] -> [3]]}"};
+
+      llvm::dbgs() << "01: " << apply(try01, ret) << "\n";
+      llvm::dbgs() << "0N: " << apply(try0N, ret) << "\n";
+    }
     return ret;
   }
 
