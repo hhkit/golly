@@ -1,11 +1,19 @@
 #include <golly/Analysis/DimensionDetection.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/StatementDetection.h>
+#include <golly/golly.h>
 #include <llvm/Analysis/RegionInfo.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
 #include <llvm/Transforms/Scalar/LoopRotation.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
+
+namespace golly {
+PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
+  fam.getResult<golly::PscopBuilderPass>(f);
+  return PreservedAnalyses::all();
+}
+} // namespace golly
 
 llvm::PassPluginLibraryInfo getGollyPluginInfo() {
   using llvm::ArrayRef;

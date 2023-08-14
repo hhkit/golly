@@ -17,7 +17,6 @@ using llvm::AnalysisInfoMixin;
 using llvm::AnalysisKey;
 using llvm::Function;
 using llvm::FunctionAnalysisManager;
-using llvm::PassInfoMixin;
 using llvm::PreservedAnalyses;
 
 using std::unique_ptr;
@@ -65,11 +64,6 @@ public:
   static AnalysisKey Key;
 
   Result run(Function &f, FunctionAnalysisManager &fam);
-};
-
-class RunGollyPass : public PassInfoMixin<RunGollyPass> {
-public:
-  PreservedAnalyses run(Function &f, FunctionAnalysisManager &fam);
 };
 
 } // namespace golly

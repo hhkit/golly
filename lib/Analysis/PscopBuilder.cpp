@@ -1047,9 +1047,4 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
   return ret;
 }
 
-PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
-  fam.getResult<golly::PscopBuilderPass>(f);
-  return PreservedAnalyses::all();
-}
-
 } // namespace golly
