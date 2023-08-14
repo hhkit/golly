@@ -398,9 +398,9 @@ public:
   using Base = llvm::InstVisitor<MaskValidator, Optional<islpp::union_map>>;
   using Result = Optional<islpp::union_map>;
 
-  MaskValidator(islpp::union_map active_wls, islpp::union_map get_lane_id)
-      : active_wls{std::move(active_wls)}, get_lane_id{std::move(get_lane_id)} {
-  }
+  MaskValidator(islpp::union_map active_threads, islpp::union_map get_lane_id)
+      : active_threads{std::move(active_threads)}, get_lane_id{std::move(
+                                                       get_lane_id)} {}
 
   Result visitConstant(const llvm::SCEVConstant *cint) {
     auto mask = cint->getAPInt().getZExtValue();
@@ -413,11 +413,14 @@ public:
       return {};
     }
 
-    auto lanes = apply_range(active_wls, get_lane_id); // StmtInst -> lids
-    auto masked_lanes = range_subtract(lanes, masks);  // StmtInst -> lids
+    auto lanes = apply_range(active_threads, get_lane_id); // StmtInst -> lids
+    llvm::dbgs() << "lanes: " << lanes << "\n";
+    llvm::dbgs() << "masks: " << masks << "\n";
+    auto masked_lanes = range_subtract(lanes, masks); // StmtInst -> lids
+    llvm::dbgs() << "masked: " << masked_lanes << "\n";
 
     return islpp::domain_subtract(
-        active_wls,
+        active_threads,
         domain(masked_lanes)); // keep the lanes that are in the masks
   }
 
@@ -452,7 +455,7 @@ public:
   Result visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) { return {}; }
 
 private:
-  islpp ::union_map active_wls; // StmtInst -> tid
+  islpp ::union_map active_threads; // StmtInst -> tid
   islpp::union_map get_lane_id;
 };
 
@@ -911,8 +914,8 @@ public:
           // this barrier
           auto barrier_statements = std::visit(
               [&](const auto &bar) -> islpp::union_map {
-                if constexpr (std::is_same_v<BarrierStatement::Block,
-                                             std::decay_t<decltype(bar)>>) {
+                using T = std::decay_t<decltype(bar)>;
+                if constexpr (std::is_same_v<BarrierStatement::Block, T>) {
                   // if it is a block-level barrier
                   const BarrierStatement::Block &block_bar = bar;
 
@@ -922,7 +925,9 @@ public:
                   // thus, ensure that the stmt distribution domain
                   // encapsulates all threads in the block
                   if (launched_threads == active_threads) {
-                    return unwrap(cross(wrap(thread_pairs), stmt_domain));
+                    return apply_range(
+                        unwrap(cross(wrap(thread_pairs), stmt_domain)),
+                        temporal_schedule);
                   } else {
                     llvm::outs() << "unreachable lanes in __syncthreads, "
                                     "potential branch divergence detected\n"
@@ -932,8 +937,7 @@ public:
                   }
                 }
 
-                if constexpr (std::is_same_v<BarrierStatement::Warp,
-                                             std::decay_t<decltype(bar)>>) {
+                if constexpr (std::is_same_v<BarrierStatement::Warp, T>) {
                   // if it is a block-level barrier
                   const BarrierStatement::Warp &warp_bar = bar;
                   // ensure that the threads that the warp is waiting for
@@ -965,13 +969,17 @@ public:
                   // therefore, filter out all wl pairs with
                   // [wid1 -> lid1] -> [wid2 -> lid2] s.t. wid1 != wid2
 
-                  const auto different_lane =
+                  const auto different_warps =
                       islpp::union_map{"{[[wid1] -> [lid1]] -> [[wid2] -> "
                                        "[lid2]] : wid1 != wid2 and 0 <= wid1 < "
                                        "8 and 0 <= wid2 < 8 and 0 <= lid1 < 32 "
                                        "and 0 <= lid2 < 32}"};
 
-                  const auto wls_same_lane = wl_pairs - different_lane;
+                  const auto wls_same_warp = wl_pairs - different_warps;
+                  llvm::dbgs() << wls_same_warp << "\n";
+                  const auto wl_to_tid = reverse(warp_lane_expr);
+                  const auto threads_same_warp = apply_range(
+                      apply_domain(wls_same_warp, wl_to_tid), wl_to_tid);
 
                   // llvm::dbgs() << "bar: " << barrier->getName() << "\n";
                   // llvm::dbgs() << active_warps << "\n";
@@ -994,9 +1002,25 @@ public:
                     return islpp::union_map{"{}"};
                   }
 
+                  llvm::dbgs() << "same threads: " << threads_same_warp << "\n";
                   llvm::dbgs() << "waiting: " << waiting_lanes << "\n";
 
-                  return reverse(range_product(*waiting_lanes, *waiting_lanes));
+                  auto statement_syncs =
+                      apply_domain(*waiting_lanes, temporal_schedule);
+                  llvm::dbgs() << "syncs: "
+                               << reverse(range_product(statement_syncs,
+                                                        statement_syncs))
+                               << "\n";
+
+                  return domain_subtract(
+                      reverse(range_product(statement_syncs, statement_syncs)),
+                      wrap(threads_same_warp));
+                }
+
+                if constexpr (std::is_same_v<BarrierStatement::End, T>) {
+                  return apply_range(
+                      unwrap(cross(wrap(thread_pairs), stmt_domain)),
+                      temporal_schedule);
                 }
                 return islpp::union_map{"{}"};
               },

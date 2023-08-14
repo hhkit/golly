@@ -23,14 +23,13 @@ static unique_ptr<Statement> build(const BasicBlock &bb) {
     auto newNode = Statement::create(
         type,
         StatementConfig{.bb = &bb, .begin = rbegin, .end = rend, .name = name});
-
+    const auto new_ptr = newNode.get();
     if (prev) {
       prev->addSuccessor(std::move(newNode));
-    }
-    prev = newNode.get();
-
-    if (!first)
+    } else {
       first = std::move(newNode);
+    }
+    prev = new_ptr;
   };
 
   while (itr != bb.end()) {
