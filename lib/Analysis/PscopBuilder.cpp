@@ -482,7 +482,7 @@ public:
 
   Pscop build(Function &f) {
     using namespace islpp;
-    stmt_info.dump(llvm::dbgs());
+    // stmt_info.dump(llvm::dbgs());
     auto fn_analysis = detectFunctionInvariants(f);
     auto loop_analysis = affinateRegions(f, fn_analysis);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
@@ -1061,7 +1061,7 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
   }
 
   auto ret = builder.build(f);
-  llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
+  // llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
   return ret;
 }
 

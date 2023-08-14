@@ -1,5 +1,6 @@
 #include <golly/Analysis/DimensionDetection.h>
 #include <golly/Analysis/PscopBuilder.h>
+#include <golly/Analysis/RaceDetection.h>
 #include <golly/Analysis/StatementDetection.h>
 #include <golly/golly.h>
 #include <llvm/Analysis/RegionInfo.h>
@@ -10,7 +11,7 @@
 
 namespace golly {
 PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
-  fam.getResult<golly::PscopBuilderPass>(f);
+  fam.getResult<golly::RaceDetector>(f);
   return PreservedAnalyses::all();
 }
 } // namespace golly
@@ -28,6 +29,7 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
                   fam.registerPass(
                       []() { return golly::StatementDetectionPass(); });
                   fam.registerPass([]() { return golly::PscopBuilderPass(); });
+                  fam.registerPass([]() { return golly::RaceDetector(); });
                 });
 
             PB.registerPipelineParsingCallback(

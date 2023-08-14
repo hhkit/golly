@@ -2,9 +2,10 @@
 
 add_llvm_pass_plugin(golly MODULE 
     golly.cpp
-    Analysis/StatementDetection.cpp
-    Analysis/PscopBuilder.cpp
     Analysis/DimensionDetection.cpp
+    Analysis/PscopBuilder.cpp
+    Analysis/RaceDetection.cpp
+    Analysis/StatementDetection.cpp
     Analysis/Statements.cpp
     Support/isl.cpp
     Support/isl_llvm.cpp)
