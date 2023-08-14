@@ -45,7 +45,7 @@ static unique_ptr<Statement> build(const BasicBlock &bb) {
   }
 
   if (beg != bb.end())
-    append(StatementTypes::length, beg, bb.end());
+    append(dividerIndex(*beg), beg, bb.end());
 
   return first;
 }

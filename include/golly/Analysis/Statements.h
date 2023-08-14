@@ -85,7 +85,7 @@ public:
 class BarrierStatement : public BaseStatement<BarrierStatement> {
 public:
   struct Warp {
-    unsigned mask = -1;
+    llvm::Value *mask;
   };
   struct Block {};
   struct End {};

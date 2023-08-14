@@ -47,10 +47,9 @@ createBarrierMetadata(const llvm::Instruction &barrier_instr) {
   if (warp_instructions.contains(fn_name)) {
     assert(as_fn->getCalledFunction()->arg_size() == 1 &&
            "warp barrier should always have a mask");
-    auto mask = as_fn->getArgOperand(0);
 
     // retrieve mask
-    return BarrierStatement::Warp{};
+    return BarrierStatement::Warp{as_fn->getArgOperand(0)};
   }
 
   if (block_instructions.contains(fn_name)) {

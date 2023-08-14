@@ -15,6 +15,7 @@
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
 #include <llvm/IR/Dominators.h>
+#include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/Instructions.h>
 #include <string>
 #include <string_view>
@@ -129,8 +130,8 @@ private:
 
 islpp::set mask_to_lane_set(unsigned mask) {
   islpp::set lanes{"{ [lid] : 0 <= lid <= 31 }"};
-  for (int i = 0; i < 32; ++i) {
-    if ((mask & (1 << i)) == 0) { // bitmask disabled
+  for (unsigned i = 0; i < 32; ++i) {
+    if ((mask & (1U << i)) == 0) { // bitmask disabled
       lanes = lanes - islpp::set{fmt::format("{{[ {} ]}}", i)};
     }
   }
@@ -391,6 +392,70 @@ private:
   string indvars;
 };
 
+class MaskValidator
+    : public llvm::SCEVVisitor<MaskValidator, Optional<islpp::union_map>> {
+public:
+  using Base = llvm::InstVisitor<MaskValidator, Optional<islpp::union_map>>;
+  using Result = Optional<islpp::union_map>;
+
+  MaskValidator(islpp::union_map active_wls, islpp::union_map get_lane_id)
+      : active_wls{std::move(active_wls)}, get_lane_id{std::move(get_lane_id)} {
+  }
+
+  Result visitConstant(const llvm::SCEVConstant *cint) {
+    auto mask = cint->getAPInt().getZExtValue();
+    // validate the mask before returning
+
+    const auto masks = islpp::union_set{detail::mask_to_lane_set(mask)};
+
+    if (0) {
+      llvm::dbgs() << "thread specified unreachable with mask in __syncwarps\n";
+      return {};
+    }
+
+    auto lanes = apply_range(active_wls, get_lane_id); // StmtInst -> lids
+    auto masked_lanes = range_subtract(lanes, masks);  // StmtInst -> lids
+
+    return islpp::domain_subtract(
+        active_wls,
+        domain(masked_lanes)); // keep the lanes that are in the masks
+  }
+
+  Result visitAddExpr(const llvm::SCEVAddExpr *S) { return {}; }
+
+  Result visitMulExpr(const llvm::SCEVMulExpr *S) { return {}; }
+
+  Result visitPtrToIntExpr(const llvm::SCEVPtrToIntExpr *S) { return {}; }
+  Result visitTruncateExpr(const llvm::SCEVTruncateExpr *S) { return {}; }
+  Result visitZeroExtendExpr(const llvm::SCEVZeroExtendExpr *S) { return {}; }
+  Result visitSignExtendExpr(const llvm::SCEVSignExtendExpr *S) { return {}; }
+  Result visitSMaxExpr(const llvm::SCEVSMaxExpr *S) { return {}; }
+  Result visitUMaxExpr(const llvm::SCEVUMaxExpr *S) { return {}; }
+  Result visitSMinExpr(const llvm::SCEVSMinExpr *S) { return {}; }
+  Result visitUMinExpr(const llvm::SCEVUMinExpr *S) { return {}; }
+
+  Result visitUDivExpr(const llvm::SCEVUDivExpr *S) { return {}; }
+  Result visitSDivInstruction(Instruction *SDiv, const llvm::SCEV *Expr) {
+    return {};
+  }
+  Result visitDivision(const llvm::SCEV *dividend, const llvm::SCEV *divisor,
+                       const llvm::SCEV *S, Instruction *inst = nullptr) {
+    return {};
+  }
+
+  Result visitAddRecExpr(const llvm::SCEVAddRecExpr *S) { return {}; }
+
+  Result visitSequentialUMinExpr(const llvm::SCEVSequentialUMinExpr *S) {
+    return {};
+  }
+  Result visitUnknown(const llvm::SCEVUnknown *S) { return {}; }
+  Result visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) { return {}; }
+
+private:
+  islpp ::union_map active_wls; // StmtInst -> tid
+  islpp::union_map get_lane_id;
+};
+
 class PscopBuilder {
   using LoopInstanceVars = DenseMap<const llvm::Loop *, LoopVariables>;
   using BBAnalysis = DenseMap<const llvm::BasicBlock *, BBInvariants>;
@@ -417,7 +482,7 @@ public:
 
   Pscop build(Function &f) {
     using namespace islpp;
-    // stmt_info.dump(llvm::dbgs());
+    stmt_info.dump(llvm::dbgs());
     auto fn_analysis = detectFunctionInvariants(f);
     auto loop_analysis = affinateRegions(f, fn_analysis);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
@@ -857,7 +922,6 @@ public:
                   // thus, ensure that the stmt distribution domain
                   // encapsulates all threads in the block
                   if (launched_threads == active_threads) {
-                    // todo: map to statements
                     return unwrap(cross(wrap(thread_pairs), stmt_domain));
                   } else {
                     llvm::outs() << "unreachable lanes in __syncthreads, "
@@ -890,13 +954,10 @@ public:
                       apply_range(apply_domain(thread_pairs, warp_lane_expr),
                                   warp_lane_expr);
 
-                  const auto active_warps = apply(active_threads, warp_expr);
+                  const auto active_warps =
+                      apply(active_threads, warp_lane_expr);
 
                   // so now we can determine threads which are in the same warp
-                  const auto waiting_lanes =
-                      islpp::union_set{detail::mask_to_lane_set(warp_bar.mask)};
-
-                  llvm::dbgs() << "warps" << active_warps << "\n";
 
                   // retain a thread pair only if:
                   //  1. threads share the same warp
@@ -906,13 +967,36 @@ public:
 
                   const auto different_lane =
                       islpp::union_map{"{[[wid1] -> [lid1]] -> [[wid2] -> "
-                                       "[lid2]] : wid1 != wid2}"};
+                                       "[lid2]] : wid1 != wid2 and 0 <= wid1 < "
+                                       "8 and 0 <= wid2 < 8 and 0 <= lid1 < 32 "
+                                       "and 0 <= lid2 < 32}"};
 
                   const auto wls_same_lane = wl_pairs - different_lane;
+
+                  // llvm::dbgs() << "bar: " << barrier->getName() << "\n";
+                  // llvm::dbgs() << active_warps << "\n";
+                  // llvm::dbgs() << "waiting:" << waiting_lanes << "\n";
 
                   //  2. the mask accepts both lanes
                   // note that mask is instanced on statements, not enough to go
                   // by mask only
+
+                  // StmtInst -> tid
+                  const auto waiting_lanes =
+                      MaskValidator{
+                          domain_subtract(distribution_schedule, stmt_domain),
+                          islpp::union_map{islpp::map{fn_analysis.getLaneId}}}
+                          .visit(scalar_evo.getSCEV(warp_bar.mask));
+
+                  if (!waiting_lanes) {
+                    // unable to get mask
+                    llvm::dbgs() << "non-affine mask subset\n";
+                    return islpp::union_map{"{}"};
+                  }
+
+                  llvm::dbgs() << "waiting: " << waiting_lanes << "\n";
+
+                  return reverse(range_product(*waiting_lanes, *waiting_lanes));
                 }
                 return islpp::union_map{"{}"};
               },
@@ -946,6 +1030,18 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
                        fam.getResult<llvm::DominatorTreeAnalysis>(f),
                        fam.getResult<llvm::PostDominatorTreeAnalysis>(f),
                        fam.getResult<golly::StatementDetectionPass>(f)};
+
+  if (f.getName() == "_Z10__syncwarpj") {
+    return Pscop{
+        .instantiation_domain = islpp::union_map{"{}"},
+        .distribution_schedule = islpp::union_map{"{}"},
+        .temporal_schedule = islpp::union_map{"{}"},
+        .sync_schedule = islpp::union_map{"{}"},
+        .write_access_relation = islpp::union_map{"{}"},
+        .read_access_relation = islpp::union_map{"{}"},
+    };
+  }
+
   auto ret = builder.build(f);
   llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
   return ret;
