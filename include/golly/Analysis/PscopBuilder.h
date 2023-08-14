@@ -22,6 +22,10 @@ using llvm::PreservedAnalyses;
 
 using std::unique_ptr;
 /*
+
+Synchronization can only be determined between two threads. A single thread is
+insufficient for determining when it synchronizes with other threads.
+
 a note on the type annotations:
   Stmt:
     A statement - an atomic subdivision of instructions that we care about
@@ -45,7 +49,7 @@ struct Pscop {
   islpp::union_map distribution_schedule; // { StmtInst -> tid }
   islpp::union_map temporal_schedule;     // { StmtInst -> Time }
 
-  islpp::union_map phase_schedule; // { tid -> StmtInst }
+  islpp::union_map sync_schedule; // { { tid -> tid } -> StmtInst }
 
   islpp::union_map write_access_relation; // param -> { StmtInst -> Access }
   islpp::union_map read_access_relation;  // param -> { StmtInst -> Access }

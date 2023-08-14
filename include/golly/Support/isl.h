@@ -200,6 +200,8 @@ UN_PROP(union_map, isl_bool, is_single_valued, isl_union_map_is_single_valued);
 UN_PROP(union_map, isl_bool, is_injective, isl_union_map_is_injective);
 UN_PROP(union_map, isl_bool, is_bijective, isl_union_map_is_bijective);
 CLOSED_UNOP(union_map, zip, isl_union_map_zip);
+CLOSED_BINOP(union_map, apply_range, isl_union_map_apply_range);
+CLOSED_BINOP(union_map, apply_domain, isl_union_map_apply_domain);
 CLOSED_BINOP(union_map, domain_product, isl_union_map_domain_product);
 CLOSED_BINOP(union_map, range_product, isl_union_map_range_product);
 CLOSED_UNOP(union_map, domain_factor, isl_union_map_factor_domain);

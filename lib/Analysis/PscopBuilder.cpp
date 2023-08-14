@@ -45,9 +45,11 @@ struct FunctionInvariants {
   };
   vector<Intrinsic> intrinsics;
 
-  islpp::set distribution_domain; // the domain of active threads
-  islpp::pw_aff getWarpId;
-  islpp::pw_aff getLaneId;
+  islpp::set distribution_domain;       // the domain of active threads
+  islpp::pw_aff getWarpId;              // [tid] -> [wid]
+  islpp::pw_aff getLaneId;              // [tid] -> lid
+  islpp::multi_pw_aff getWarpLaneTuple; // [tid] -> [wid, lid]
+  islpp::map warpTupleToLane;           // [wid, lid] -> [ lid ]
 };
 
 namespace detail {
@@ -169,7 +171,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Pscop &pscop) {
   os << "domain:\n  " << pscop.instantiation_domain << "\n";
   os << "distribution_schedule:\n  " << pscop.distribution_schedule << "\n";
   os << "temporal_schedule:\n  " << pscop.temporal_schedule << "\n";
-  os << "sync_schedule:\n  " << pscop.phase_schedule << "\n";
+  os << "sync_schedule:\n  " << pscop.sync_schedule << "\n";
   os << "writes:\n  " << pscop.write_access_relation << "\n";
   os << "reads:\n  " << pscop.read_access_relation << "\n";
   return os;
@@ -434,7 +436,7 @@ public:
         .instantiation_domain = statement_domain,
         .distribution_schedule = distribution_schedule,
         .temporal_schedule = temporal_schedule,
-        .phase_schedule = sync_schedule,
+        .sync_schedule = sync_schedule,
         .write_access_relation = std::move(access_relations.writes),
         .read_access_relation = std::move(access_relations.reads),
     };
@@ -458,10 +460,19 @@ public:
     auto lane_id_getter = islpp::pw_aff{
         fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", oracle.warpSize)};
 
+    auto warp_tuple_getter = islpp::multi_pw_aff{
+        fmt::format("{{ [{0}] -> [ [floor( {0} / {1} )] -> [{0} mod {1}] ] }} ",
+                    "tidx", oracle.warpSize)};
+
+    auto warp_to_lane = islpp::map{islpp::multi_pw_aff{
+        fmt::format("{{ [{0}, {1}] -> [ {1} ] }} ", "wid", "lid")}};
+
     return FunctionInvariants{.intrinsics = intrinsics,
                               .distribution_domain = domain,
                               .getWarpId = warpid_getter,
-                              .getLaneId = lane_id_getter};
+                              .getLaneId = lane_id_getter,
+                              .getWarpLaneTuple = warp_tuple_getter,
+                              .warpTupleToLane = warp_to_lane};
   }
 
   LoopInstanceVars affinateRegions(Function &f,
@@ -826,10 +837,15 @@ public:
             continue;
           }
 
+          // all threads that participate in this statement
+          const auto thread_pairs =
+              unwrap(cross(active_threads, active_threads)) -
+              identity(active_threads);
+
           // verify that all threads that reach this barrier CAN reach
           // this barrier
-          auto is_divergence_free = std::visit(
-              [&](const auto &bar) -> bool {
+          auto barrier_statements = std::visit(
+              [&](const auto &bar) -> islpp::union_map {
                 if constexpr (std::is_same_v<BarrierStatement::Block,
                                              std::decay_t<decltype(bar)>>) {
                   // if it is a block-level barrier
@@ -841,13 +857,14 @@ public:
                   // thus, ensure that the stmt distribution domain
                   // encapsulates all threads in the block
                   if (launched_threads == active_threads) {
-                    return true;
+                    // todo: map to statements
+                    return unwrap(cross(wrap(thread_pairs), stmt_domain));
                   } else {
                     llvm::outs() << "unreachable lanes in __syncthreads, "
                                     "potential branch divergence detected\n"
                                  << launched_threads - active_threads
                                  << " are unreachable.\n";
-                    return false;
+                    return islpp::union_map{"{}"};
                   }
                 }
 
@@ -858,29 +875,50 @@ public:
                   // ensure that the threads that the warp is waiting for
                   // can arrive at the warp
 
+                  const auto warp_lane_expr = islpp::union_map{
+                      islpp::map{fn_analysis.getWarpLaneTuple}};
+
+                  // retrieve thread id from warp_lane tuple
+                  const auto warp_lane_inv_expr = reverse(warp_lane_expr);
+
+                  const auto warp_expr =
+                      islpp::union_map{islpp::map{fn_analysis.getWarpId}};
+
+                  // take note:
+                  // (wid1 -> lid1) -> (wid2 -> lid2)
+                  const auto wl_pairs =
+                      apply_range(apply_domain(thread_pairs, warp_lane_expr),
+                                  warp_lane_expr);
+
+                  const auto active_warps = apply(active_threads, warp_expr);
+
+                  // so now we can determine threads which are in the same warp
                   const auto waiting_lanes =
                       islpp::union_set{detail::mask_to_lane_set(warp_bar.mask)};
-                  const auto active_lanes = waiting_lanes;
-                  const auto unreachable_lanes = active_lanes - waiting_lanes;
 
-                  if (is_empty(unreachable_lanes)) {
-                    return true;
-                  } else {
-                    llvm::outs() << "unreachable lanes in __syncwarps, "
-                                    "potential branch "
-                                    "divergence detected\n";
-                    return false;
-                  }
+                  llvm::dbgs() << "warps" << active_warps << "\n";
+
+                  // retain a thread pair only if:
+                  //  1. threads share the same warp
+                  // wl pair is guaranteed to be [i -> j]
+                  // therefore, filter out all wl pairs with
+                  // [wid1 -> lid1] -> [wid2 -> lid2] s.t. wid1 != wid2
+
+                  const auto different_lane =
+                      islpp::union_map{"{[[wid1] -> [lid1]] -> [[wid2] -> "
+                                       "[lid2]] : wid1 != wid2}"};
+
+                  const auto wls_same_lane = wl_pairs - different_lane;
+
+                  //  2. the mask accepts both lanes
+                  // note that mask is instanced on statements, not enough to go
+                  // by mask only
                 }
-                return true;
+                return islpp::union_map{"{}"};
               },
               barrier->getBarrier());
 
-          if (is_divergence_free) {
-            // thus, this barrier works
-            ret = ret +
-                  reverse(domain_subtract(distribution_schedule, stmt_domain));
-          }
+          ret = ret + barrier_statements;
         }
       }
     }
