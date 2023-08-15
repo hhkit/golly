@@ -408,15 +408,15 @@ public:
 
     const auto masks = islpp::union_set{detail::mask_to_lane_set(mask)};
 
-    if (0) {
+    auto lanes = apply_range(active_threads, get_lane_id); // StmtInst -> lids
+    auto masked_lanes = range_intersect(lanes, masks);     // StmtInst -> lids
+
+    if (range(masked_lanes) > range(active_threads)) {
       llvm::dbgs() << "thread specified unreachable with mask in __syncwarps\n";
       return {};
-    }
+    };
 
-    auto lanes = apply_range(active_threads, get_lane_id); // StmtInst -> lids
-    auto masked_lanes = range_subtract(lanes, masks);      // StmtInst -> lids
-
-    return islpp::domain_subtract(
+    return islpp::domain_intersect(
         active_threads,
         domain(masked_lanes)); // keep the lanes that are in the masks
   }
@@ -498,12 +498,12 @@ public:
     auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
 
     return Pscop{
-        .instantiation_domain = statement_domain,
-        .distribution_schedule = distribution_schedule,
-        .temporal_schedule = temporal_schedule,
-        .sync_schedule = sync_schedule,
-        .write_access_relation = std::move(access_relations.writes),
-        .read_access_relation = std::move(access_relations.reads),
+        .instantiation_domain = coalesce(statement_domain),
+        .distribution_schedule = coalesce(distribution_schedule),
+        .temporal_schedule = coalesce(temporal_schedule),
+        .sync_schedule = coalesce(sync_schedule),
+        .write_access_relation = coalesce(access_relations.writes),
+        .read_access_relation = coalesce(access_relations.reads),
     };
   }
 
@@ -774,7 +774,7 @@ public:
     }
 
     // restrict to the invocations that actually exist
-    ret = domain_subtract(ret, range(statement_domain));
+    ret = domain_intersect(ret, range(statement_domain));
     return ret;
   }
 
@@ -828,7 +828,7 @@ public:
       ret = ret + islpp::union_map{islpp::map{dom}};
 
     // trim invalid values
-    return domain_subtract(ret, range(statement_domain));
+    return domain_intersect(ret, range(statement_domain));
   }
 
   AccessRelations buildAccessRelations(LoopInstanceVars &loop_analysis,
@@ -879,8 +879,9 @@ public:
 
     const auto launched_threads =
         islpp::union_set{fn_analysis.distribution_domain};
+    const auto tid_to_stmt_inst = reverse(distribution_schedule);
 
-    for (auto &[visit, domain] : bb_analysis) {
+    for (auto &[visit, _domain] : bb_analysis) {
       auto loop = loop_info.getLoopFor(visit);
 
       for (auto &statement : stmt_info.iterateStatements(*visit)) {
@@ -889,6 +890,9 @@ public:
 
         // the statement invocations in this domain
         const auto stmt_domain = apply(stmt_set, statement_domain);
+
+        // threads to statement invocation, limited to this statement
+        const auto tid_to_stmt = range_intersect(tid_to_stmt_inst, stmt_domain);
 
         // if we are a barrier...
         if (const auto barrier = statement.as<golly::BarrierStatement>()) {
@@ -912,6 +916,13 @@ public:
           auto barrier_statements = std::visit(
               [&](const auto &bar) -> islpp::union_map {
                 using T = std::decay_t<decltype(bar)>;
+                if constexpr (std::is_same_v<BarrierStatement::End, T>) {
+                  auto dmn_insts =
+                      apply_range(domain_map(thread_pairs), tid_to_stmt) +
+                      apply_range(range_map(thread_pairs), tid_to_stmt);
+                  return coalesce(dmn_insts);
+                }
+
                 if constexpr (std::is_same_v<BarrierStatement::Block, T>) {
                   // if it is a block-level barrier
                   const BarrierStatement::Block &block_bar = bar;
@@ -922,9 +933,10 @@ public:
                   // thus, ensure that the stmt distribution domain
                   // encapsulates all threads in the block
                   if (launched_threads == active_threads) {
-                    return apply_range(
-                        unwrap(cross(wrap(thread_pairs), stmt_domain)),
-                        temporal_schedule);
+                    auto dmn_insts =
+                        apply_range(domain_map(thread_pairs), tid_to_stmt) +
+                        apply_range(range_map(thread_pairs), tid_to_stmt);
+                    return dmn_insts;
                   } else {
                     llvm::outs() << "unreachable lanes in __syncthreads, "
                                     "potential branch divergence detected\n"
@@ -966,6 +978,7 @@ public:
                   // therefore, filter out all wl pairs with
                   // [wid1 -> lid1] -> [wid2 -> lid2] s.t. wid1 != wid2
 
+                  // also we can totally hardcode this for now
                   const auto different_warps =
                       islpp::union_map{"{[[wid1] -> [lid1]] -> [[wid2] -> "
                                        "[lid2]] : wid1 != wid2 and 0 <= wid1 < "
@@ -981,10 +994,14 @@ public:
                   // note that mask is instanced on statements, not enough to go
                   // by mask only
 
+                  // get all threads involved with this statement
+                  const auto stmt_distribution =
+                      domain_intersect(distribution_schedule, stmt_domain);
+
                   // StmtInst -> tid
                   const auto waiting_lanes =
                       MaskValidator{
-                          domain_subtract(distribution_schedule, stmt_domain),
+                          stmt_distribution,
                           islpp::union_map{islpp::map{fn_analysis.getLaneId}}}
                           .visit(scalar_evo.getSCEV(warp_bar.mask));
 
@@ -994,19 +1011,23 @@ public:
                     return islpp::union_map{"{}"};
                   }
 
-                  auto statement_syncs =
-                      apply_domain(*waiting_lanes, temporal_schedule);
+                  auto threads_to_lanes = reverse(*waiting_lanes);
+                  auto waiting_threads = domain(threads_to_lanes);
 
-                  return domain_subtract(
-                      reverse(range_product(statement_syncs, statement_syncs)),
-                      wrap(threads_same_warp));
+                  auto waiting_thread_pairs =
+                      unwrap(cross(waiting_threads, waiting_threads)) -
+                      identity(waiting_threads);
+
+                  auto threads_to_stmt =
+                      apply_range(domain_map(waiting_thread_pairs),
+                                  threads_to_lanes) +
+                      apply_range(range_map(waiting_thread_pairs),
+                                  threads_to_lanes);
+
+                  return domain_intersect(threads_to_stmt,
+                                          wrap(threads_same_warp));
                 }
 
-                if constexpr (std::is_same_v<BarrierStatement::End, T>) {
-                  return apply_range(
-                      unwrap(cross(wrap(thread_pairs), stmt_domain)),
-                      temporal_schedule);
-                }
                 return islpp::union_map{"{}"};
               },
               barrier->getBarrier());

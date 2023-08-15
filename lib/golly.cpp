@@ -11,6 +11,10 @@
 
 namespace golly {
 PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
+  if (f.getName() == "_Z10__syncwarpj") {
+    return PreservedAnalyses::none();
+  }
+
   fam.getResult<golly::RaceDetector>(f);
   return PreservedAnalyses::all();
 }

@@ -192,9 +192,9 @@ OPEN_BINOP(union_map, union_map, val, fixed_power,
 OPEN_BINOP(union_map, union_set, union_set, universal,
            isl_union_map_from_domain_and_range);
 OPEN_UNOP(union_map, union_set, identity, isl_union_set_identity);
-OPEN_BINOP(union_map, union_map, union_set, domain_subtract,
+OPEN_BINOP(union_map, union_map, union_set, domain_intersect,
            isl_union_map_intersect_domain);
-OPEN_BINOP(union_map, union_map, union_set, range_subtract,
+OPEN_BINOP(union_map, union_map, union_set, range_intersect,
            isl_union_map_intersect_range);
 UN_PROP(union_map, isl_bool, is_single_valued, isl_union_map_is_single_valued);
 UN_PROP(union_map, isl_bool, is_injective, isl_union_map_is_injective);
