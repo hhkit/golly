@@ -68,8 +68,6 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
                                         pscop.distribution_schedule))),
       wrap(thread_pairs));
 
-  // -------------------------------------------------------
-  // --------------------------------------------------------
   auto conflicting_syncs = ([&]() {
     // [[S->T] -> [SWriteInst -> TAccessInst]] -> [S->T]
     const auto thread_pairs = domain_map(threads_to_wa);
@@ -96,14 +94,6 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   if (!is_empty(conflicting_syncs)) {
     llvm::dbgs() << "race detected\n" << domain(conflicting_syncs) << "\n";
   }
-
-  // apply_range(range_factor_domain(domain_map(threads_to_wa)), sync_times)
-
-  // we can only know the next lexicographic sync if we have the two threads
-  // synchronizing
-  // we can use stmt inst
-  // [[S -> T] -> StmtInst] -> sync time
-  // maps to the lexmin(StmtInst < sched(S,T))...
   return {};
 }
 } // namespace golly
