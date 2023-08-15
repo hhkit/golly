@@ -94,7 +94,7 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   })();
 
   if (!is_empty(conflicting_syncs)) {
-    llvm::dbgs() << "race detected\n" << conflicting_syncs << "\n";
+    llvm::dbgs() << "race detected\n" << domain(conflicting_syncs) << "\n";
   }
 
   // apply_range(range_factor_domain(domain_map(threads_to_wa)), sync_times)
