@@ -96,9 +96,9 @@ bool MemoryAccessStatement::isDivider(const llvm::Instruction &instr) {
 string_view MemoryAccessStatement::getSuffix() const {
   switch (getAccessType()) {
   case Access::Read:
-    return "LOAD.";
+    return "LOAD";
   case Access::Write:
-    return "STORE.";
+    return "STORE";
   }
   assert(false && "memory access should only be load or store");
   return {};
@@ -141,7 +141,7 @@ void Statement::addSuccessor(unique_ptr<Statement> child) {
   successor = std::move(child);
 }
 
-string Statement::getName() const { return string{getSuffix()} + name; }
+string Statement::getName() const { return string{getSuffix()} + ":" + name; }
 
 Statement *Statement::getSuccessor() const { return successor.get(); }
 

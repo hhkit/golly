@@ -19,7 +19,7 @@ static unique_ptr<Statement> build(const BasicBlock &bb) {
 
   auto append = [&](unsigned type, BasicBlock::const_iterator rbegin,
                     BasicBlock::const_iterator rend) {
-    const auto name = fmt::format("{}_{}", bb.getName().str(), count++);
+    const auto name = fmt::format("{}::{}", bb.getName().str(), count++);
     auto newNode = Statement::create(
         type,
         StatementConfig{.bb = &bb, .begin = rbegin, .end = rend, .name = name});
