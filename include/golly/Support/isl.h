@@ -312,6 +312,10 @@ inline map add_dims(map m, dim on, int count) {
 
   return map{new_map};
 }
+inline map project_onto(set s, dim on, int first, unsigned count) {
+  return map{isl_set_project_onto_map(s.yield(), static_cast<isl_dim_type>(on),
+                                      first, count)};
+}
 
 SET_OPERATORS(map)
 CLOSED_UNOP(map, operator-, isl_map_neg);

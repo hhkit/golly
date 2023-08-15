@@ -759,17 +759,17 @@ public:
     islpp::union_map ret{"{}"};
 
     auto distribution_domain = fn_analysis.distribution_domain;
-    auto map_template = identity(distribution_domain);
 
-    const auto old_dims = dims(distribution_domain, islpp::dim::in);
+    const auto distri_dims = dims(distribution_domain, islpp::dim::set);
     for (auto &[bb, invar] : bb_analysis) {
       const auto new_dims = dims(invar.domain, islpp::dim::in);
 
-      auto dimension_corrected =
-          add_dims(map_template, islpp::dim::in, new_dims - old_dims);
+      auto test = project_onto(invar.domain, islpp::dim::set, 0, distri_dims);
+
+      llvm::dbgs() << "DBG: " << bb->getName() << " - " << test << "\n";
       for (auto &stmt : stmt_info.iterateStatements(*bb)) {
-        ret = ret + islpp::union_map(
-                        name(map_template, islpp::dim::in, stmt.getName()));
+        ret =
+            ret + islpp::union_map(name(test, islpp::dim::in, stmt.getName()));
       }
     }
 

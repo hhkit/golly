@@ -7,7 +7,7 @@ AnalysisKey RaceDetector::Key;
 
 Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   const auto &pscop = fam.getResult<golly::PscopBuilderPass>(f);
-  // llvm::dbgs() << "pscop:\n" << pscop << "\n";
+  llvm::dbgs() << "pscop:\n" << pscop << "\n";
 
   auto tid_to_stmt_inst = reverse(pscop.distribution_schedule);
 
