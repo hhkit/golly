@@ -1037,16 +1037,6 @@ public:
       }
     }
 
-    // now we have all valid syncs
-    if (0) {
-      // test bed
-
-      islpp::union_set try01{"{ [[0] -> [1]]}"};
-      islpp::union_set try0N{"{ [[0] -> [3]]}"};
-
-      llvm::dbgs() << "01: " << apply(try01, ret) << "\n";
-      llvm::dbgs() << "0N: " << apply(try0N, ret) << "\n";
-    }
     return ret;
   }
 

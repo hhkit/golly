@@ -1,9 +1,7 @@
-#include <cstdlib>
-
-__host__ void yolo(int *val) {
-  int sum = 0;
-  int j;
-  for (int i = 0; i < (j = rand()); ++i)
-    val[j] += 1;
-  val[0] = 0;
+__global__ void yolo(int *val) {
+  if (threadIdx.x < 16)
+    val[threadIdx.x + 1] = 0;
+  else
+    val[threadIdx.x] = 1;
+  __syncthreads();
 }
