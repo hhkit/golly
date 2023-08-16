@@ -131,6 +131,19 @@ struct space_config {
   OPEN_UNOP(SET, MAP, domain, isl_##MAP##_domain);                             \
   OPEN_UNOP(SET, MAP, range, isl_##MAP##_range);
 
+#define NAME_OPERATORS(MAP, SET)                                               \
+  inline string name(SET bs) {                                                 \
+    auto str = isl_##SET##_get_tuple_name(bs.get());                           \
+    auto ret = string{str};                                                    \
+    return ret;                                                                \
+  }                                                                            \
+  inline string name(MAP bs, dim on) {                                         \
+    auto str =                                                                 \
+        isl_##MAP##_get_tuple_name(bs.get(), static_cast<isl_dim_type>(on));   \
+    auto ret = string{str};                                                    \
+    return ret;                                                                \
+  }
+
 #define SET_OPERATORS(TYPE)                                                    \
   UN_PROP(TYPE, isl_bool, is_empty, isl_##TYPE##_is_empty)                     \
   CLOSED_BINOP(TYPE, operator*, isl_##TYPE##_intersect);                       \
@@ -173,6 +186,11 @@ class val : public detail::wrap<isl_val, isl_val_copy, isl_val_free> {
   explicit val(consts);
   explicit val(long i);
   explicit val(unsigned long i);
+};
+
+class multi_val : public detail::wrap<isl_multi_val, isl_multi_val_copy,
+                                      isl_multi_val_free> {
+  using base::base;
 };
 
 class union_map : public detail::wrap<isl_union_map, isl_union_map_copy,
@@ -336,36 +354,86 @@ public:
 
 #define SAMPLE(TYPE)                                                           \
   inline point sample(TYPE s) {                                                \
-    return point{isl_##TYPE##_sample_point(s.get())};                          \
+    return point{isl_##TYPE##_sample_point(s.yield())};                        \
   }
 
 SAMPLE(set)
 SAMPLE(union_set)
 
+class basic_set : public detail::wrap<isl_basic_set, isl_basic_set_copy,
+                                      isl_basic_set_free> {
+public:
+  using base::base;
+  explicit operator set() const {
+    return set{isl_set_from_basic_set(basic_set{*this}.yield())};
+  }
+  explicit operator union_set() const {
+    return union_set{isl_union_set_from_basic_set(basic_set{*this}.yield())};
+  }
+};
+
+class basic_map : public detail::wrap<isl_basic_map, isl_basic_map_copy,
+                                      isl_basic_map_free> {
+public:
+  using base::base;
+
+  explicit operator map() const {
+    return map{isl_map_from_basic_map(basic_map{*this}.yield())};
+  }
+  explicit operator union_map() const {
+    return union_map{isl_union_map_from_basic_map(basic_map{*this}.yield())};
+  }
+};
+
+MAP_OPERATORS(basic_map, basic_set)
+
+NAME_OPERATORS(basic_map, basic_set)
+NAME_OPERATORS(map, set)
+
+inline point sample(basic_set s) {
+  return point{isl_basic_set_sample_point(s.yield())};
+}
+inline basic_map sample(union_map s) {
+  return basic_map{isl_union_map_sample(s.yield())};
+}
+inline basic_map clean(basic_map s) {
+  auto dims = isl_basic_map_dim(s.get(), isl_dim_type::isl_dim_param);
+  return basic_map{isl_basic_map_remove_dims(
+      s.yield(), isl_dim_type::isl_dim_param, 0, dims)};
+}
+
 template <typename Fn> void for_each(const union_set &us, Fn &&fn) {
   isl_union_set_foreach_set(
       us.get(),
-      +[](isl_set *st, void *user) { (*static_cast<Fn *>(user))(set{st}); },
+      +[](isl_set *st, void *user) -> isl_stat {
+        return (*static_cast<Fn *>(user))(set{st});
+      },
       &fn);
 }
 
 template <typename Fn> void for_each(const union_map &us, Fn &&fn) {
   isl_union_map_foreach_map(
       us.get(),
-      +[](isl_map *st, void *user) { (*static_cast<Fn *>(user))(map{st}); },
+      +[](isl_map *st, void *user) -> isl_stat {
+        return (*static_cast<Fn *>(user))(map{st});
+      },
       &fn);
 }
 
 template <typename Fn> void scan(const union_set &us, Fn &&fn) {
   isl_union_set_foreach_point(
       us.get(),
-      +[](isl_point *pt, void *user) { (*static_cast<Fn *>(user))(point{pt}); },
+      +[](isl_point *pt, void *user) -> isl_stat {
+        return (*static_cast<Fn *>(user))(point{pt});
+      },
       &fn);
 }
 template <typename Fn> void scan(const set &us, Fn &&fn) {
   isl_set_foreach_point(
       us.get(),
-      +[](isl_point *pt, void *user) { (*static_cast<Fn *>(user))(point{pt}); },
+      +[](isl_point *pt, void *user) -> isl_stat {
+        return (*static_cast<Fn *>(user))(point{pt});
+      },
       &fn);
 }
 
@@ -532,6 +600,8 @@ public:
 #define DOMAIN_SPACE(TYPE)                                                     \
   UN_PROP(TYPE, space, domain, isl_##TYPE##_get_domain_space);
 
+SPACE_OPS(basic_set)
+SPACE_OPS(basic_map)
 SPACE_OPS(set)
 SPACE_OPS(map)
 SPACE_OPS(union_set)
@@ -641,9 +711,12 @@ public:
   PRINT_DEF(union_map)
   PRINT_DEF(set)
   PRINT_DEF(map)
+  PRINT_DEF(basic_set)
+  PRINT_DEF(basic_map)
   PRINT_DEF(space)
   PRINT_DEF(local_space)
   PRINT_DEF(val)
+  PRINT_DEF(multi_val)
   PRINT_DEF(point)
   PRINT_DEF(aff)
   PRINT_DEF(pw_aff)

@@ -55,14 +55,17 @@ void StatementDetection::analyze(const Function &f) {
   for (auto &bb : f) {
     map[&bb] = detail::build(bb);
   }
+
+  for (auto &[bb, stmt] : map)
+    cached_names[stmt->getName()] = stmt.get();
 }
 
-Statement *StatementDetection::getTopLevelPhase(const BasicBlock &bb) const {
-  if (auto itr = map.find(&bb); itr != map.end()) {
-    return itr->second.get();
-  }
+const Statement *StatementDetection::getStatement(string_view name) const {
+  if (auto itr = cached_names.find(name); itr != cached_names.end())
+    return itr->second;
   return nullptr;
 }
+
 StatementDetection::StatementRange
 StatementDetection::iterateStatements(const BasicBlock &f) const {
   if (auto itr = map.find(&f); itr != map.end()) {

@@ -747,7 +747,7 @@ public:
         auto out = name(domain, sb.getName());
         auto in = name(islpp::set{"{ [] }"}, sb.getName());
 
-        ret = ret + islpp::union_map{unwrap(cross(in, out))};
+        ret = ret + universal(islpp::union_set{in}, islpp::union_set{out});
       }
     }
     return ret;
@@ -766,7 +766,6 @@ public:
 
       auto test = project_onto(invar.domain, islpp::dim::set, 0, distri_dims);
 
-      llvm::dbgs() << "DBG: " << bb->getName() << " - " << test << "\n";
       for (auto &stmt : stmt_info.iterateStatements(*bb)) {
         ret =
             ret + islpp::union_map(name(test, islpp::dim::in, stmt.getName()));
@@ -907,9 +906,8 @@ public:
           }
 
           // all threads that participate in this statement
-          const auto thread_pairs =
-              unwrap(cross(active_threads, active_threads)) -
-              identity(active_threads);
+          const auto thread_pairs = universal(active_threads, active_threads) -
+                                    identity(active_threads);
 
           // verify that all threads that reach this barrier CAN reach
           // this barrier
@@ -1015,7 +1013,7 @@ public:
                   auto waiting_threads = domain(threads_to_lanes);
 
                   auto waiting_thread_pairs =
-                      unwrap(cross(waiting_threads, waiting_threads)) -
+                      universal(waiting_threads, waiting_threads) -
                       identity(waiting_threads);
 
                   auto threads_to_stmt =

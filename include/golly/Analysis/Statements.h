@@ -60,9 +60,9 @@ public:
 
   static bool isStatementDivider(const Instruction &instr);
   static unique_ptr<Statement> create(unsigned index, const StatementConfig &);
+  const Instruction &getDefiningInstruction() const { return *last_; }
 
 protected:
-  const Instruction &getDefiningInstruction() const { return *last_; }
   virtual string_view getSuffix() const { return ""; }
 
 private:
