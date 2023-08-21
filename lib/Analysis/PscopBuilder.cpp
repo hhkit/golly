@@ -43,7 +43,7 @@ struct dim3 {
 
 struct OracleData {
   dim3 ntid{16, 16, 1}; // size of threadblock
-  dim3 ncta{1, 1, 1};   // size of grid
+  dim3 ncta{2, 1, 1};   // size of grid
   int warpSize = 32;    // size of warp
 };
 
@@ -64,6 +64,7 @@ struct FunctionInvariants {
   vector<Count> ntid_intrinsics;
 
   islpp::set distribution_domain; // [cta, tid], the domain of active threads
+  islpp::multi_aff getCtaId;      // [cta, tid] -> [cta]
   islpp::multi_aff getThreadId;   // [cta, tid] -> [tid]
   islpp::pw_aff getWarpId;        // [cta, tid] -> [wid]
   islpp::pw_aff getLaneId;        // [cta, tid] -> [lid]
@@ -554,12 +555,13 @@ public:
         {"llvm.nvvm.read.ptx.sreg.ctaid.x", "ctaidx",
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "ctaidx",
                                 oracle.ncta.x)}},
+        {"llvm.nvvm.read.ptx.sreg.tid.y", "tidy",
+         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidy",
+                                oracle.ntid.y)}},
         {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx",
                                 oracle.ntid.x)}},
-        {"llvm.nvvm.read.ptx.sreg.tid.y", "tidy",
-         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidy",
-                                oracle.ntid.y)}}};
+    };
 
     auto counts = vector<FunctionInvariants::Count>{
         {"llvm.nvvm.read.ptx.sreg.ncta.x", oracle.ncta.x},
@@ -573,6 +575,19 @@ public:
       for (auto &elem : intrinsics)
         ret = flat_cross(ret, elem.domain);
       return ret;
+    })();
+
+    islpp::multi_aff block_getter = ([&]() -> islpp::multi_aff {
+      auto domain_space = get_space(domain);
+      auto gid_count = 1;
+
+      vector<islpp::aff> affs;
+      affs.reserve(gid_count);
+
+      for (int i = 0; i < gid_count; ++i)
+        affs.emplace_back(domain_space.coeff<islpp::aff>(islpp::dim::in, i, 1));
+
+      return flat_range_product(affs);
     })();
 
     islpp::multi_aff thread_getter = ([&]() -> islpp::multi_aff {
@@ -606,6 +621,7 @@ public:
     return FunctionInvariants{.tid_intrinsics = intrinsics,
                               .ntid_intrinsics = counts,
                               .distribution_domain = domain,
+                              .getCtaId = block_getter,
                               .getThreadId = thread_getter,
                               .getWarpId = warpid_getter,
                               .getLaneId = lane_id_getter,
@@ -1006,11 +1022,18 @@ public:
 
                   // thus, ensure that the stmt distribution domain
                   // encapsulates all threads in the block
-                  if (launched_threads == active_threads) {
+                  if (1) {
                     auto dmn_insts =
                         apply_range(domain_map(thread_pairs), tid_to_stmt) +
                         apply_range(range_map(thread_pairs), tid_to_stmt);
-                    return dmn_insts;
+
+                    // filter to same gids
+                    auto same_gid = apply_range(
+                        islpp::union_map{islpp::map{fn_analysis.getCtaId}},
+                        reverse(islpp::union_map{
+                            islpp::map{fn_analysis.getCtaId}}));
+
+                    return domain_intersect(dmn_insts, wrap(same_gid));
                   } else {
                     llvm::outs() << "unreachable lanes in __syncthreads, "
                                     "potential branch divergence detected\n"
