@@ -64,7 +64,7 @@ struct FunctionInvariants {
   vector<Count> ntid_intrinsics;
 
   islpp::set distribution_domain; // [cta, tid], the domain of active threads
-  islpp::pw_aff getThreadId;      // [cta, tid] -> [tid]
+  islpp::multi_aff getThreadId;   // [cta, tid] -> [tid]
   islpp::pw_aff getWarpId;        // [cta, tid] -> [wid]
   islpp::pw_aff getLaneId;        // [cta, tid] -> [lid]
   islpp::multi_pw_aff getWarpLaneTuple; // [cta, tid] -> [wid, lid]
@@ -76,7 +76,7 @@ class IVarDatabase {
 public:
   void addFunctionAnalysis(const FunctionInvariants &fn_analysis) {
     for (auto &elem : fn_analysis.tid_intrinsics)
-      thread_ids.try_emplace(elem.llvm_symbol, elem.alias);
+      thread_ids.emplace_back(elem);
     for (auto &elem : fn_analysis.ntid_intrinsics)
       thread_counts.try_emplace(elem.llvm_symbol, elem.count);
 
@@ -116,8 +116,11 @@ public:
       return true;
 
     if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      return thread_ids.find(callInst->getCalledFunction()->getName()) !=
-             thread_ids.end();
+      return std::ranges::find_if(
+                 thread_ids, [&](const FunctionInvariants::Id &val) {
+                   return val.llvm_symbol ==
+                          callInst->getCalledFunction()->getName();
+                 }) != thread_ids.end();
     }
 
     return false;
@@ -128,30 +131,37 @@ public:
       return itr->second;
 
     if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      auto itr = thread_ids.find(callInst->getCalledFunction()->getName());
+      auto itr = std::ranges::find_if(
+          thread_ids, [&](const FunctionInvariants::Id &val) {
+            return val.llvm_symbol == callInst->getCalledFunction()->getName();
+          });
       if (itr != thread_ids.end())
-        return itr->second;
+        return itr->alias;
     }
 
     return "";
   }
 
-  string getVector() const {
-    vector<string> tmp;
-    tmp.reserve(thread_ids.size() + induction_vars.size());
-    for (auto &entry : thread_ids)
-      tmp.emplace_back(entry.second);
+  Optional<int> getIVarIndex(const llvm::Value *val) const {
+    if (auto itr = induction_vars.find(val); itr != induction_vars.end())
+      return (itr - induction_vars.begin()) + thread_ids.size();
 
-    for (auto &&[k, v] : induction_vars)
-      tmp.emplace_back(v);
+    if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
+      auto itr = std::ranges::find_if(
+          thread_ids, [&](const FunctionInvariants::Id &val) {
+            return val.llvm_symbol == callInst->getCalledFunction()->getName();
+          });
+      if (itr != thread_ids.end())
+        return itr - thread_ids.begin();
+    }
 
-    return fmt::format("[{}]", fmt::join(tmp, ","));
+    return {};
   }
 
   const islpp::set &getDomain() const { return domain; }
 
 private:
-  llvm::StringMap<string> thread_ids;
+  std::vector<FunctionInvariants::Id> thread_ids;
   llvm::StringMap<int> thread_counts;
   llvm::DenseSet<const llvm::Value *> invariant_loads;
   InductionVarSet induction_vars;
@@ -233,13 +243,10 @@ class QuaffBuilder : public llvm::SCEVVisitor<QuaffBuilder, QuaffExpr> {
 public:
   QuaffBuilder(LoopVariables &ri, detail::IVarDatabase &ivdb,
                llvm::ScalarEvolution &se)
-      : ri{ri}, ivdb{ivdb}, se{se} {
-    indvars = ivdb.getVector();
-  }
+      : ri{ri}, ivdb{ivdb}, se{se}, space{get_space(ivdb.getDomain())} {}
 
   QuaffExpr visitConstant(const llvm::SCEVConstant *cint) {
-    auto expr = fmt::format("{{ {} -> [{}]  }}", indvars,
-                            cint->getAPInt().getSExtValue());
+    auto expr = space.constant<islpp::aff>(cint->getAPInt().getSExtValue());
     return QuaffExpr{QuaffClass::CInt, islpp::pw_aff{expr}};
   }
 
@@ -341,8 +348,8 @@ public:
       if (!indvar) // no canonical indvar
         return QuaffExpr{QuaffClass::Invalid};
 
-      auto loop_expr = islpp::pw_aff{fmt::format(
-          "{{ {} -> [{}] }}", ivdb.getVector(), ivdb.getName(indvar))};
+      auto loop_expr = islpp::pw_aff{space.coeff<islpp::aff>(
+          islpp::dim::in, *ivdb.getIVarIndex(indvar), 1)};
 
       if (step.type != QuaffClass::CInt)
         // loop expr is at least a loop variable, so the step must be
@@ -374,21 +381,23 @@ public:
   }
   QuaffExpr visitUnknown(const llvm::SCEVUnknown *S) {
     const auto value = S->getValue();
-    if (ivdb.isIVar(value)) {
+    if (auto index = ivdb.getIVarIndex(value)) {
       auto expr =
-          fmt::format("{{ {} -> [{}]  }}", indvars, ivdb.getName(value));
+          islpp::pw_aff{space.coeff<islpp::aff>(islpp::dim::in, *index, 1)};
       return QuaffExpr{QuaffClass::IVar, islpp::pw_aff{expr}};
     }
 
     if (ivdb.isInvariantLoad(value)) {
       auto name = value->getName();
-      auto expr =
-          fmt::format("[{0}] -> {{ {1} -> [{0}]  }}", name.str(), indvars);
+      auto param_space = add_param(space, name);
+
+      auto expr = param_space.coeff<islpp::aff>(
+          islpp::dim::param, dims(param_space, islpp::dim::param) - 1, 1);
       return QuaffExpr{QuaffClass::Param, islpp::pw_aff{expr}};
     }
 
     if (auto cint = ivdb.getConstant(value)) {
-      auto expr = fmt::format("{{ {} -> [{}]  }}", indvars, *cint);
+      auto expr = space.constant<islpp::aff>(*cint);
       return QuaffExpr{QuaffClass::CInt, islpp::pw_aff{expr}};
     }
 
@@ -420,7 +429,7 @@ private:
   LoopVariables &ri;
   detail::IVarDatabase &ivdb;
   llvm::ScalarEvolution &se;
-  string indvars;
+  islpp::space space;
 };
 
 class MaskValidator
@@ -542,6 +551,9 @@ public:
     OracleData oracle;
 
     auto intrinsics = vector<FunctionInvariants::Id>{
+        {"llvm.nvvm.read.ptx.sreg.ctaid.x", "ctaidx",
+         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "ctaidx",
+                                oracle.ncta.x)}},
         {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx",
                                 oracle.ntid.x)}},
@@ -550,14 +562,34 @@ public:
                                 oracle.ntid.y)}}};
 
     auto counts = vector<FunctionInvariants::Count>{
+        {"llvm.nvvm.read.ptx.sreg.ncta.x", oracle.ncta.x},
+        {"llvm.nvvm.read.ptx.sreg.ncta.y", oracle.ncta.y},
         {"llvm.nvvm.read.ptx.sreg.ntid.x", oracle.ntid.x},
         {"llvm.nvvm.read.ptx.sreg.ntid.y", oracle.ntid.y},
     };
 
-    islpp::set domain{" { [] } "};
+    islpp::set domain = ([&]() {
+      islpp::set ret{" { [] } "};
+      for (auto &elem : intrinsics)
+        ret = flat_cross(ret, elem.domain);
+      return ret;
+    })();
 
-    for (auto &elem : intrinsics)
-      domain = flat_cross(domain, elem.domain);
+    islpp::multi_aff thread_getter = ([&]() -> islpp::multi_aff {
+      auto domain_space = get_space(domain);
+      auto gid_count = 1;
+      auto max = dims(domain, islpp::dim::set);
+
+      vector<islpp::aff> affs;
+      affs.reserve(max - gid_count);
+
+      for (int i = gid_count; i < max; ++i)
+        affs.emplace_back(domain_space.coeff<islpp::aff>(islpp::dim::in, i, 1));
+
+      return flat_range_product(affs);
+    })();
+
+    // llvm::dbgs() << "tidget" << thread_getter << "\n";
 
     auto warpid_getter = islpp::pw_aff{fmt::format(
         "{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", oracle.warpSize)};
@@ -574,6 +606,7 @@ public:
     return FunctionInvariants{.tid_intrinsics = intrinsics,
                               .ntid_intrinsics = counts,
                               .distribution_domain = domain,
+                              .getThreadId = thread_getter,
                               .getWarpId = warpid_getter,
                               .getLaneId = lane_id_getter,
                               .getWarpLaneTuple = warp_tuple_getter,
@@ -629,9 +662,10 @@ public:
             auto f = getQuasiaffineForm(fin, loop, invariants)->expr;
 
             // we generate an identity function for the newly added variable
-            auto ident =
-                pw_aff{fmt::format("{{ {} -> [{}]}}", invariants.getVector(),
-                                   invariants.getName(loopVar))};
+            auto domain_space = islpp::get_space(invariants.getDomain());
+            auto ident = islpp::pw_aff{domain_space.coeff<islpp::aff>(
+                islpp::dim::in, *invariants.getIVarIndex(loopVar), 1)};
+
             invariants.addConstraint(le_set(i, ident) * lt_set(ident, f));
 
             // [tid] : 0 <= tid <= 255

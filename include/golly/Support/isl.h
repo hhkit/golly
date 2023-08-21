@@ -14,6 +14,7 @@
 #include <isl/union_map.h>
 #include <isl/union_set.h>
 #include <isl/val.h>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -491,8 +492,42 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
 
 // okay who designed this?
 MAP_EXPRESSION(aff, map);
-SETMAP_EXPRESSION(multi_aff, set, map);
-SETMAP_EXPRESSION(pw_aff, set, map);
+
+class multi_aff : public detail::wrap<isl_multi_aff, isl_multi_aff_copy,
+                                      isl_multi_aff_free> {
+public:
+  using base::base;
+  multi_aff(string_view isl)
+      : base{isl_multi_aff_read_from_str(ctx(), isl.data())} {}
+  multi_aff(aff val) : base{isl_multi_aff_from_aff(val.yield())} {}
+  explicit operator set() const {
+    return set(isl_set_from_multi_aff(multi_aff{*this}.yield()));
+  }
+  explicit operator map() const {
+    return map(isl_map_from_multi_aff(multi_aff{*this}.yield()));
+  }
+};
+CLOSED_BINOP(multi_aff, operator+, isl_multi_aff_add)
+CLOSED_BINOP(multi_aff, operator-, isl_multi_aff_sub)
+
+class pw_aff
+    : public detail::wrap<isl_pw_aff, isl_pw_aff_copy, isl_pw_aff_free> {
+public:
+  using base::base;
+  explicit pw_aff(string_view isl)
+      : base{isl_pw_aff_read_from_str(ctx(), isl.data())} {}
+  explicit pw_aff(aff val) : base{isl_pw_aff_from_aff(val.yield())} {}
+
+  explicit operator set() const {
+    return set(isl_set_from_pw_aff(pw_aff{*this}.yield()));
+  }
+  explicit operator map() const {
+    return map(isl_map_from_pw_aff(pw_aff{*this}.yield()));
+  }
+};
+CLOSED_BINOP(pw_aff, operator+, isl_pw_aff_add)
+CLOSED_BINOP(pw_aff, operator-, isl_pw_aff_sub)
+
 SETMAP_EXPRESSION(pw_multi_aff, set, map);
 SETMAP_EXPRESSION(multi_pw_aff, set, map);
 MAP_EXPRESSION(union_pw_aff, union_map);
@@ -600,6 +635,9 @@ public:
 #define DOMAIN_SPACE(TYPE)                                                     \
   UN_PROP(TYPE, space, domain, isl_##TYPE##_get_domain_space);
 
+DIMS(space)
+DIMS(local_space)
+
 SPACE_OPS(basic_set)
 SPACE_OPS(basic_map)
 SPACE_OPS(set)
@@ -671,6 +709,14 @@ inline T local_space::coeff(dim on, int index, int val) const {
   return cast<T>(std::move(setted));
 }
 
+inline space add_param(space sp, string_view param) {
+  auto old_param_count = isl_space_dim(sp.get(), isl_dim_param);
+  auto tmp = isl_space_add_dims(sp.yield(), isl_dim_type::isl_dim_param, 1);
+  tmp =
+      isl_space_set_dim_name(tmp, isl_dim_param, old_param_count, param.data());
+  return space{tmp};
+}
+
 // increments last val
 inline multi_aff increment(multi_aff ma) {
   auto ret = ma;
@@ -690,6 +736,16 @@ inline multi_aff project_up(multi_aff ma) {
 
   return multi_aff{
       isl_multi_aff_flat_range_product(added.yield(), wcoeff.yield())};
+}
+
+inline multi_aff flat_range_product(std::span<aff> affs) {
+  auto itr = affs.begin();
+  islpp::multi_aff ret{*itr++};
+
+  for (; itr != affs.end(); ++itr)
+    ret = flat_range_product(ret, multi_aff{*itr});
+
+  return ret;
 }
 
 inline multi_aff append_zero(multi_aff ma) {
