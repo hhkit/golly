@@ -49,25 +49,26 @@ struct OracleData {
 
 // calculate based on launch parameters
 struct FunctionInvariants {
-  struct Intrinsic {
+  struct Id {
     string llvm_symbol;
     string alias;
     islpp::set domain;
   };
-  vector<Intrinsic> tid_intrinsics;
-
-  struct Counts {
+  struct Count {
     string llvm_symbol;
-    string alias;
     int count;
   };
-  vector<Counts> ntid_intrinsics;
 
-  islpp::set distribution_domain;       // the domain of active threads
-  islpp::pw_aff getWarpId;              // [tid] -> [wid]
-  islpp::pw_aff getLaneId;              // [tid] -> lid
-  islpp::multi_pw_aff getWarpLaneTuple; // [tid] -> [wid, lid]
-  islpp::map warpTupleToLane;           // [wid, lid] -> [ lid ]
+  vector<Id> tid_intrinsics;
+
+  vector<Count> ntid_intrinsics;
+
+  islpp::set distribution_domain; // [cta, tid], the domain of active threads
+  islpp::pw_aff getThreadId;      // [cta, tid] -> [tid]
+  islpp::pw_aff getWarpId;        // [cta, tid] -> [wid]
+  islpp::pw_aff getLaneId;        // [cta, tid] -> [lid]
+  islpp::multi_pw_aff getWarpLaneTuple; // [cta, tid] -> [wid, lid]
+  islpp::map warpTupleToLane;           // [wid, lid] -> [lid]
 };
 
 namespace detail {
@@ -77,8 +78,7 @@ public:
     for (auto &elem : fn_analysis.tid_intrinsics)
       thread_ids.try_emplace(elem.llvm_symbol, elem.alias);
     for (auto &elem : fn_analysis.ntid_intrinsics)
-      thread_counts.try_emplace(elem.llvm_symbol,
-                                Counts{elem.alias, elem.count});
+      thread_counts.try_emplace(elem.llvm_symbol, elem.count);
 
     domain = fn_analysis.distribution_domain;
   }
@@ -101,9 +101,9 @@ public:
       if (auto itr =
               thread_counts.find(callInst->getCalledFunction()->getName());
           itr != thread_counts.end())
-        return itr->second.value;
+        return itr->second;
     }
-    llvm::dbgs() << "not constant " << *val << "\n";
+
     return {};
   }
 
@@ -151,12 +151,8 @@ public:
   const islpp::set &getDomain() const { return domain; }
 
 private:
-  struct Counts {
-    string alias;
-    int value;
-  };
   llvm::StringMap<string> thread_ids;
-  llvm::StringMap<Counts> thread_counts;
+  llvm::StringMap<int> thread_counts;
   llvm::DenseSet<const llvm::Value *> invariant_loads;
   InductionVarSet induction_vars;
   islpp::set domain{"{ [] }"};
@@ -487,7 +483,7 @@ public:
   Result visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) { return {}; }
 
 private:
-  islpp ::union_map active_threads; // StmtInst -> tid
+  islpp::union_map active_threads; // StmtInst -> tid
   islpp::union_map get_lane_id;
 };
 
@@ -507,8 +503,8 @@ public:
   Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
                                          LoopVariables &invariants) {
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
-    llvm::dbgs() << "scev dump: ";
-    scev->dump();
+    // llvm::dbgs() << "scev dump: ";
+    // scev->dump();
     QuaffBuilder builder{invariants, invariants, scalar_evo};
 
     auto ret = builder.visit(scev);
@@ -545,7 +541,7 @@ public:
   FunctionInvariants detectFunctionInvariants(Function &f) {
     OracleData oracle;
 
-    auto intrinsics = vector<FunctionInvariants::Intrinsic>{
+    auto intrinsics = vector<FunctionInvariants::Id>{
         {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx",
                                 oracle.ntid.x)}},
@@ -553,9 +549,9 @@ public:
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidy",
                                 oracle.ntid.y)}}};
 
-    auto counts = vector<FunctionInvariants::Counts>{
-        {"llvm.nvvm.read.ptx.sreg.ntid.x", "ntidx", oracle.ntid.x},
-        {"llvm.nvvm.read.ptx.sreg.ntid.y", "ntidy", oracle.ntid.y},
+    auto counts = vector<FunctionInvariants::Count>{
+        {"llvm.nvvm.read.ptx.sreg.ntid.x", oracle.ntid.x},
+        {"llvm.nvvm.read.ptx.sreg.ntid.y", oracle.ntid.y},
     };
 
     islpp::set domain{" { [] } "};
