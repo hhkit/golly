@@ -37,6 +37,16 @@ using std::vector;
 
 using InductionVarSet = llvm::MapVector<const llvm::Value *, string>;
 
+struct dim3 {
+  int x, y, z;
+};
+
+struct OracleData {
+  dim3 ntid{16, 16, 1}; // size of threadblock
+  dim3 ncta{1, 1, 1};   // size of grid
+  int warpSize = 32;    // size of warp
+};
+
 // calculate based on launch parameters
 struct FunctionInvariants {
   struct Intrinsic {
@@ -44,7 +54,14 @@ struct FunctionInvariants {
     string alias;
     islpp::set domain;
   };
-  vector<Intrinsic> intrinsics;
+  vector<Intrinsic> tid_intrinsics;
+
+  struct Counts {
+    string llvm_symbol;
+    string alias;
+    int count;
+  };
+  vector<Counts> ntid_intrinsics;
 
   islpp::set distribution_domain;       // the domain of active threads
   islpp::pw_aff getWarpId;              // [tid] -> [wid]
@@ -57,8 +74,11 @@ namespace detail {
 class IVarDatabase {
 public:
   void addFunctionAnalysis(const FunctionInvariants &fn_analysis) {
-    for (auto &elem : fn_analysis.intrinsics)
+    for (auto &elem : fn_analysis.tid_intrinsics)
       thread_ids.try_emplace(elem.llvm_symbol, elem.alias);
+    for (auto &elem : fn_analysis.ntid_intrinsics)
+      thread_counts.try_emplace(elem.llvm_symbol,
+                                Counts{elem.alias, elem.count});
 
     domain = fn_analysis.distribution_domain;
   }
@@ -74,6 +94,17 @@ public:
 
   bool isInvariantLoad(const llvm::Value *val) const {
     return invariant_loads.contains(val);
+  }
+
+  Optional<int> getConstant(const llvm::Value *val) {
+    if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
+      if (auto itr =
+              thread_counts.find(callInst->getCalledFunction()->getName());
+          itr != thread_counts.end())
+        return itr->second.value;
+    }
+    llvm::dbgs() << "not constant " << *val << "\n";
+    return {};
   }
 
   void addConstraint(islpp::set constraining_set) {
@@ -120,7 +151,12 @@ public:
   const islpp::set &getDomain() const { return domain; }
 
 private:
+  struct Counts {
+    string alias;
+    int value;
+  };
   llvm::StringMap<string> thread_ids;
+  llvm::StringMap<Counts> thread_counts;
   llvm::DenseSet<const llvm::Value *> invariant_loads;
   InductionVarSet induction_vars;
   islpp::set domain{"{ [] }"};
@@ -139,12 +175,6 @@ islpp::set mask_to_lane_set(unsigned mask) {
 }
 
 } // namespace detail
-
-struct OracleData {
-  int ntid = 256;    // size of threadblock
-  int ncta = 1;      // size of grid
-  int warpSize = 32; // size of warp
-};
 
 enum class QuaffClass {
   CInt,  // compile-time constant integer
@@ -361,6 +391,11 @@ public:
       return QuaffExpr{QuaffClass::Param, islpp::pw_aff{expr}};
     }
 
+    if (auto cint = ivdb.getConstant(value)) {
+      auto expr = fmt::format("{{ {} -> [{}]  }}", indvars, *cint);
+      return QuaffExpr{QuaffClass::CInt, islpp::pw_aff{expr}};
+    }
+
     // todo
     return QuaffExpr{QuaffClass::Invalid};
   }
@@ -472,8 +507,8 @@ public:
   Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
                                          LoopVariables &invariants) {
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
-    // llvm::dbgs() << "scev dump: ";
-    // scev->dump();
+    llvm::dbgs() << "scev dump: ";
+    scev->dump();
     QuaffBuilder builder{invariants, invariants, scalar_evo};
 
     auto ret = builder.visit(scev);
@@ -513,7 +548,15 @@ public:
     auto intrinsics = vector<FunctionInvariants::Intrinsic>{
         {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx",
-                                oracle.ntid)}}};
+                                oracle.ntid.x)}},
+        {"llvm.nvvm.read.ptx.sreg.tid.y", "tidy",
+         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidy",
+                                oracle.ntid.y)}}};
+
+    auto counts = vector<FunctionInvariants::Counts>{
+        {"llvm.nvvm.read.ptx.sreg.ntid.x", "ntidx", oracle.ntid.x},
+        {"llvm.nvvm.read.ptx.sreg.ntid.y", "ntidy", oracle.ntid.y},
+    };
 
     islpp::set domain{" { [] } "};
 
@@ -532,7 +575,8 @@ public:
     auto warp_to_lane = islpp::map{islpp::multi_pw_aff{
         fmt::format("{{ [{0}, {1}] -> [ {1} ] }} ", "wid", "lid")}};
 
-    return FunctionInvariants{.intrinsics = intrinsics,
+    return FunctionInvariants{.tid_intrinsics = intrinsics,
+                              .ntid_intrinsics = counts,
                               .distribution_domain = domain,
                               .getWarpId = warpid_getter,
                               .getLaneId = lane_id_getter,
@@ -859,6 +903,8 @@ public:
               writes = writes + islpp::union_map{as_map};
               break;
             }
+          } else {
+            llvm::dbgs() << "not quasi affine\n";
           }
         }
       }
@@ -1070,7 +1116,7 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
   }
 
   auto ret = builder.build(f);
-  // llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
+  llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
   return ret;
 }
 
