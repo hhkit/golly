@@ -100,6 +100,7 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
 
   if (!is_empty(conflicting_syncs)) {
     const auto &stmt_info = fam.getResult<golly::StatementDetectionPass>(f);
+
     auto conflicting_statements =
         unwrap(range(unwrap(domain(conflicting_syncs))));
 
@@ -137,13 +138,13 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
                              dbg.getLine(), dbg.getColumn());
         };
 
-        llvm::dbgs() << "Race detected between: \n  "
+        llvm::errs() << "Race detected between: \n  "
                      << caret_loc(write_dbg_loc) << " on thread "
                      << sample(domain(single_pair)) << " and \n  "
                      << caret_loc(acc_dbg_loc) << " on thread "
                      << sample(range(single_pair)) << "\n";
 
-        llvm::dbgs() << sampl << "\n";
+        llvm::errs() << sampl << "\n";
         return isl_stat_ok;
       }
     });

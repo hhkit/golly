@@ -42,7 +42,7 @@ struct dim3 {
 };
 
 struct OracleData {
-  dim3 ntid{16, 16, 1}; // size of threadblock
+  dim3 ntid{256, 1, 1}; // size of threadblock
   dim3 ncta{2, 1, 1};   // size of grid
   int warpSize = 32;    // size of warp
 };
@@ -66,10 +66,9 @@ struct FunctionInvariants {
   islpp::set distribution_domain; // [cta, tid], the domain of active threads
   islpp::multi_aff getCtaId;      // [cta, tid] -> [cta]
   islpp::multi_aff getThreadId;   // [cta, tid] -> [tid]
-  islpp::pw_aff getWarpId;        // [cta, tid] -> [wid]
-  islpp::pw_aff getLaneId;        // [cta, tid] -> [lid]
-  islpp::multi_pw_aff getWarpLaneTuple; // [cta, tid] -> [wid, lid]
-  islpp::map warpTupleToLane;           // [wid, lid] -> [lid]
+  islpp::map getWarpLaneTuple;    // [tid] -> [wid, lid]
+  islpp::map warpTupleToWarp;     // [wid -> lid] -> [wid]
+  islpp::map warpTupleToLane;     // [wid -> lid] -> [lid]
 };
 
 namespace detail {
@@ -439,27 +438,64 @@ public:
   using Base = llvm::InstVisitor<MaskValidator, Optional<islpp::union_map>>;
   using Result = Optional<islpp::union_map>;
 
-  MaskValidator(islpp::union_map active_threads, islpp::union_map get_lane_id)
-      : active_threads{std::move(active_threads)}, get_lane_id{std::move(
-                                                       get_lane_id)} {}
+  MaskValidator(islpp::union_map active_threads,
+                const FunctionInvariants &fn_inv)
+      : active_threads{std::move(active_threads)}, fn{fn_inv} {}
 
   Result visitConstant(const llvm::SCEVConstant *cint) {
     auto mask = cint->getAPInt().getZExtValue();
-    // validate the mask before returning
 
-    const auto masks = islpp::union_set{detail::mask_to_lane_set(mask)};
+    auto get_thread = islpp::map{fn.getThreadId};
+    auto thread_to_lane = islpp::union_map{apply_range(
+        apply_range(get_thread, fn.getWarpLaneTuple), fn.warpTupleToLane)};
+    auto get_warp = apply_range(
+        get_thread, apply_range(fn.getWarpLaneTuple, fn.warpTupleToWarp));
+    auto warp_lane_to_thread = islpp::union_map{reverse(fn.getWarpLaneTuple)};
 
-    auto lanes = apply_range(active_threads, get_lane_id); // StmtInst -> lids
-    auto masked_lanes = range_intersect(lanes, masks);     // StmtInst -> lids
+    // [lid] -> [cta,tid]
+    auto lane_to_thread = reverse(thread_to_lane);
 
-    if (range(masked_lanes) > range(active_threads)) {
-      llvm::dbgs() << "thread specified unreachable with mask in __syncwarps\n";
+    // [lid]
+    const auto masked_lanes = islpp::union_set{detail::mask_to_lane_set(mask)};
+    // llvm::dbgs() << "masks:" << active_lanes << "\n";
+
+    const auto ctids = range(active_threads); // [cta, tid]
+    const auto ctids_to_cta = apply_range(
+        identity(ctids),
+        islpp::union_map{islpp::map{fn.getCtaId}}); // [cta, tid] -> [cta]
+    const auto ctids_to_warp = apply_range(
+        identity(ctids), islpp::union_map{get_warp}); // [cta, tid] -> [wid]
+
+    // [cta, tid] -> [cta -> wid]
+    const auto ctid_to_cwid = range_product(ctids_to_cta, ctids_to_warp);
+
+    // [cta -> wid] -> [lid -> lid]
+    const auto masked_warp_lanes =
+        universal(range(ctid_to_cwid), wrap(identity(masked_lanes)));
+    const auto masked_threads = ([&]() {
+      // [cta -> lid] -> [wid -> lid]
+      // [cta] -> [wid->lid]
+      // [cta] -> [tid]
+      auto vals = apply_range(domain_factor_domain(zip(masked_warp_lanes)),
+                              warp_lane_to_thread);
+
+      auto sum = islpp::union_set{"{}"};
+      for_each(vals, [&](islpp::map m) -> isl_stat {
+        sum = sum + islpp::union_set{flatten(wrap(m))};
+        return isl_stat_ok;
+      });
+      return sum;
+    })();
+
+    if (masked_threads > range(active_threads)) {
+      llvm::errs() << "thread specified unreachable with mask in __syncwarps\n";
+      llvm::errs() << masked_threads - range(active_threads) << "\n";
       return {};
     };
 
     return islpp::domain_intersect(
         active_threads,
-        domain(masked_lanes)); // keep the lanes that are in the masks
+        masked_threads); // keep the lanes that are in the masks
   }
 
   Result visitAddExpr(const llvm::SCEVAddExpr *S) { return {}; }
@@ -495,6 +531,7 @@ public:
 private:
   islpp::union_map active_threads; // StmtInst -> tid
   islpp::union_map get_lane_id;
+  const FunctionInvariants &fn;
 };
 
 class PscopBuilder {
@@ -555,9 +592,9 @@ public:
         {"llvm.nvvm.read.ptx.sreg.ctaid.x", "ctaidx",
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "ctaidx",
                                 oracle.ncta.x)}},
-        {"llvm.nvvm.read.ptx.sreg.tid.y", "tidy",
-         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidy",
-                                oracle.ntid.y)}},
+        // {"llvm.nvvm.read.ptx.sreg.tid.y", "tidy",
+        //  islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidy",
+        //                         oracle.ntid.y)}},
         {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
          islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx",
                                 oracle.ntid.x)}},
@@ -606,27 +643,29 @@ public:
 
     // llvm::dbgs() << "tidget" << thread_getter << "\n";
 
-    auto warpid_getter = islpp::pw_aff{fmt::format(
+    auto warpid_getter = islpp::map{fmt::format(
         "{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", oracle.warpSize)};
-    auto lane_id_getter = islpp::pw_aff{
+    auto lane_id_getter = islpp::map{
         fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", oracle.warpSize)};
 
-    auto warp_tuple_getter = islpp::multi_pw_aff{
+    auto warp_tuple_getter = islpp::map{
         fmt::format("{{ [{0}] -> [ [floor( {0} / {1} )] -> [{0} mod {1}] ] }} ",
                     "tidx", oracle.warpSize)};
 
-    auto warp_to_lane = islpp::map{islpp::multi_pw_aff{
-        fmt::format("{{ [{0}, {1}] -> [ {1} ] }} ", "wid", "lid")}};
+    auto wl_to_warp = islpp::map{
+        fmt::format("{{ [[{0}] -> [{1}]] -> [ {0} ] }} ", "wid", "lid")};
+
+    auto wl_to_lane = islpp::map{
+        fmt::format("{{ [[{0}] -> [{1}]] -> [ {1} ] }} ", "wid", "lid")};
 
     return FunctionInvariants{.tid_intrinsics = intrinsics,
                               .ntid_intrinsics = counts,
                               .distribution_domain = domain,
                               .getCtaId = block_getter,
                               .getThreadId = thread_getter,
-                              .getWarpId = warpid_getter,
-                              .getLaneId = lane_id_getter,
                               .getWarpLaneTuple = warp_tuple_getter,
-                              .warpTupleToLane = warp_to_lane};
+                              .warpTupleToWarp = wl_to_warp,
+                              .warpTupleToLane = wl_to_lane};
   }
 
   LoopInstanceVars affinateRegions(Function &f,
@@ -852,8 +891,6 @@ public:
 
     const auto distri_dims = dims(distribution_domain, islpp::dim::set);
     for (auto &[bb, invar] : bb_analysis) {
-      const auto new_dims = dims(invar.domain, islpp::dim::in);
-
       auto test = project_onto(invar.domain, islpp::dim::set, 0, distri_dims);
 
       for (auto &stmt : stmt_info.iterateStatements(*bb)) {
@@ -972,6 +1009,25 @@ public:
         islpp::union_set{fn_analysis.distribution_domain};
     const auto tid_to_stmt_inst = reverse(distribution_schedule);
 
+    // prepare expressions
+
+    // [cta, tid] -> [cta, tid]
+    const auto same_cta = ([&]() -> islpp::union_map {
+      auto get_cta = islpp::map{fn_analysis.getCtaId};
+      return islpp::union_map{apply_range(get_cta, reverse(get_cta))};
+    })();
+
+    // [wid -> lid] -> [wid -> lid], wid == wid
+    const auto same_warps = islpp::union_map{apply_range(
+        fn_analysis.warpTupleToWarp, reverse(fn_analysis.warpTupleToWarp))};
+
+    // [cta,tid] -> [wid -> lid]
+    const auto thread_to_warp_lane = islpp::union_map{apply_range(
+        islpp::map{fn_analysis.getThreadId}, fn_analysis.getWarpLaneTuple)};
+
+    // [wid -> lid] -> [cta,tid]
+    const auto warp_lane_to_thread = reverse(thread_to_warp_lane);
+
     for (auto &[visit, _domain] : bb_analysis) {
       auto loop = loop_info.getLoopFor(visit);
 
@@ -990,6 +1046,7 @@ public:
           // do barrier stuff
 
           // retrieve the active threads in this domain
+          // { [cta,tid] }
           const auto active_threads = apply(stmt_domain, distribution_schedule);
 
           if (is_empty(active_threads)) {
@@ -1044,48 +1101,32 @@ public:
                 }
 
                 if constexpr (std::is_same_v<BarrierStatement::Warp, T>) {
-                  // if it is a block-level barrier
+                  // if it is a warp-level barrier
                   const BarrierStatement::Warp &warp_bar = bar;
                   // ensure that the threads that the warp is waiting for
                   // can arrive at the warp
 
-                  const auto warp_lane_expr = islpp::union_map{
-                      islpp::map{fn_analysis.getWarpLaneTuple}};
-
-                  // retrieve thread id from warp_lane tuple
-                  const auto warp_lane_inv_expr = reverse(warp_lane_expr);
-
-                  const auto warp_expr =
-                      islpp::union_map{islpp::map{fn_analysis.getWarpId}};
-
                   // take note:
                   // (wid1 -> lid1) -> (wid2 -> lid2)
-                  const auto wl_pairs =
-                      apply_range(apply_domain(thread_pairs, warp_lane_expr),
-                                  warp_lane_expr);
+                  const auto wl_pairs = apply_range(
+                      apply_domain(thread_pairs, thread_to_warp_lane),
+                      thread_to_warp_lane);
 
                   const auto active_warps =
-                      apply(active_threads, warp_lane_expr);
+                      apply(active_threads, thread_to_warp_lane);
 
                   // so now we can determine threads which are in the same warp
 
                   // retain a thread pair only if:
                   //  1. threads share the same warp
-                  // wl pair is guaranteed to be [i -> j]
-                  // therefore, filter out all wl pairs with
-                  // [wid1 -> lid1] -> [wid2 -> lid2] s.t. wid1 != wid2
+                  const auto wls_same_warp = wl_pairs * same_warps;
 
-                  // also we can totally hardcode this for now
-                  const auto different_warps =
-                      islpp::union_map{"{[[wid1] -> [lid1]] -> [[wid2] -> "
-                                       "[lid2]] : wid1 != wid2 and 0 <= wid1 < "
-                                       "8 and 0 <= wid2 < 8 and 0 <= lid1 < 32 "
-                                       "and 0 <= lid2 < 32}"};
-
-                  const auto wls_same_warp = wl_pairs - different_warps;
-                  const auto wl_to_tid = reverse(warp_lane_expr);
-                  const auto threads_same_warp = apply_range(
-                      apply_domain(wls_same_warp, wl_to_tid), wl_to_tid);
+                  // [cta,tid] -> [cta,tid] s.t. wid1 == wid2
+                  const auto threads_same_warp =
+                      apply_range(
+                          apply_domain(wls_same_warp, warp_lane_to_thread),
+                          warp_lane_to_thread) -
+                      same_cta;
 
                   //  2. the mask accepts both lanes
                   // note that mask is instanced on statements, not enough to go
@@ -1097,10 +1138,8 @@ public:
 
                   // StmtInst -> tid
                   const auto waiting_lanes =
-                      MaskValidator{
-                          stmt_distribution,
-                          islpp::union_map{islpp::map{fn_analysis.getLaneId}}}
-                          .visit(scalar_evo.getSCEV(warp_bar.mask));
+                      MaskValidator{stmt_distribution, fn_analysis}.visit(
+                          scalar_evo.getSCEV(warp_bar.mask));
 
                   if (!waiting_lanes) {
                     // unable to get mask

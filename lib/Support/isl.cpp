@@ -35,25 +35,6 @@ string osstream::str() {
   return retval;
 }
 
-// space::space(const space_config &names)
-//     : base{([&]() -> isl_space * {
-//         auto sp = isl_space_alloc(ctx(), names.params.size(),
-//         names.in.size(),
-//                                   names.out.size());
-
-//         auto set_dim_names = [&](isl_dim_type dim_type,
-//                                  const vector<string> &vals) {
-//           unsigned gen = 0;
-//           for (auto &elem : vals)
-//             sp = isl_space_set_dim_name(sp, dim_type, gen++, elem.data());
-//         };
-
-//         set_dim_names(isl_dim_type::isl_dim_param, names.params);
-//         set_dim_names(isl_dim_type::isl_dim_in, names.in);
-//         set_dim_names(isl_dim_type::isl_dim_out, names.params);
-//         return sp;
-//       })()} {}
-
 // val
 val::val(consts val)
     : base{([](consts val) -> isl_val * {

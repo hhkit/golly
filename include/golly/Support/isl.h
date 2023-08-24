@@ -340,10 +340,12 @@ SET_OPERATORS(map)
 CLOSED_UNOP(map, operator-, isl_map_neg);
 OPEN_UNOP(map, set, identity, isl_set_identity);
 MAP_OPERATORS(map, set);
-
+CLOSED_UNOP(set, flatten, isl_set_flatten);
+CLOSED_UNOP(map, flatten, isl_map_flatten);
 CLOSED_BINOP(map, flat_cross, isl_map_flat_product);
 CLOSED_BINOP(map, apply_range, isl_map_apply_range);
 CLOSED_BINOP(map, apply_domain, isl_map_apply_domain);
+CLOSED_UNOP(map, reverse, isl_map_reverse)
 
 LEXICAL_OPERATORS(set, map);
 LEXICAL_OPERATORS(map, map);
@@ -387,7 +389,6 @@ public:
 };
 
 MAP_OPERATORS(basic_map, basic_set)
-
 NAME_OPERATORS(basic_map, basic_set)
 NAME_OPERATORS(map, set)
 

@@ -56,13 +56,16 @@ void StatementDetection::analyze(const Function &f) {
     map[&bb] = detail::build(bb);
   }
 
-  for (auto &[bb, stmt] : map)
-    cached_names[stmt->getName()] = stmt.get();
+  for (auto &[bb, _] : map) {
+    for (auto &stmt : iterateStatements(*bb))
+      cached_names[stmt.getName()] = &stmt;
+  }
 }
 
 const Statement *StatementDetection::getStatement(string_view name) const {
-  if (auto itr = cached_names.find(name); itr != cached_names.end())
+  if (auto itr = cached_names.find(name); itr != cached_names.end()) {
     return itr->second;
+  }
   return nullptr;
 }
 
