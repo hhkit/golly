@@ -1,4 +1,4 @@
-#include <golly/Analysis/DimensionDetection.h>
+#include <golly/Analysis/CudaParameterDetection.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/RaceDetection.h>
 #include <golly/Analysis/StatementDetection.h>
@@ -29,7 +29,7 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
             PB.registerAnalysisRegistrationCallback(
                 [](llvm::FunctionAnalysisManager &fam) {
                   fam.registerPass(
-                      []() { return golly::DimensionDetection(); });
+                      []() { return golly::CudaParameterDetection(); });
                   fam.registerPass(
                       []() { return golly::StatementDetectionPass(); });
                   fam.registerPass([]() { return golly::PscopBuilderPass(); });

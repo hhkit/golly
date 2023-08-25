@@ -1,4 +1,5 @@
 #include <fmt/format.h>
+#include <golly/Analysis/CudaParameterDetection.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/StatementDetection.h>
 #include <golly/Support/Traversal.h>
@@ -42,26 +43,13 @@ struct dim3 {
 };
 
 struct OracleData {
-  dim3 ntid{256, 1, 1}; // size of threadblock
-  dim3 ncta{2, 1, 1};   // size of grid
+  dim3 ntid{16, 16, 1}; // size of threadblock
+  dim3 ncta{1, 1, 1};   // size of grid
   int warpSize = 32;    // size of warp
 };
 
 // calculate based on launch parameters
 struct FunctionInvariants {
-  struct Id {
-    string llvm_symbol;
-    string alias;
-    islpp::set domain;
-  };
-  struct Count {
-    string llvm_symbol;
-    int count;
-  };
-
-  vector<Id> tid_intrinsics;
-
-  vector<Count> ntid_intrinsics;
 
   islpp::set distribution_domain; // [cta, tid], the domain of active threads
   islpp::multi_aff getCtaId;      // [cta, tid] -> [cta]
@@ -74,12 +62,9 @@ struct FunctionInvariants {
 namespace detail {
 class IVarDatabase {
 public:
-  void addFunctionAnalysis(const FunctionInvariants &fn_analysis) {
-    for (auto &elem : fn_analysis.tid_intrinsics)
-      thread_ids.emplace_back(elem);
-    for (auto &elem : fn_analysis.ntid_intrinsics)
-      thread_counts.try_emplace(elem.llvm_symbol, elem.count);
+  IVarDatabase(CudaParameters &params) : thread_params{&params} {}
 
+  void addFunctionAnalysis(const FunctionInvariants &fn_analysis) {
     domain = fn_analysis.distribution_domain;
   }
 
@@ -96,17 +81,6 @@ public:
     return invariant_loads.contains(val);
   }
 
-  Optional<int> getConstant(const llvm::Value *val) {
-    if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      if (auto itr =
-              thread_counts.find(callInst->getCalledFunction()->getName());
-          itr != thread_counts.end())
-        return itr->second;
-    }
-
-    return {};
-  }
-
   void addConstraint(islpp::set constraining_set) {
     domain = domain * constraining_set;
   }
@@ -115,13 +89,8 @@ public:
     if (induction_vars.find(val) != induction_vars.end())
       return true;
 
-    if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      return std::ranges::find_if(
-                 thread_ids, [&](const FunctionInvariants::Id &val) {
-                   return val.llvm_symbol ==
-                          callInst->getCalledFunction()->getName();
-                 }) != thread_ids.end();
-    }
+    if (auto intrin = thread_params->getIntrinsic(val))
+      return intrin->type == IntrinsicType::id;
 
     return false;
   }
@@ -130,13 +99,9 @@ public:
     if (auto itr = induction_vars.find(val); itr != induction_vars.end())
       return itr->second;
 
-    if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      auto itr = std::ranges::find_if(
-          thread_ids, [&](const FunctionInvariants::Id &val) {
-            return val.llvm_symbol == callInst->getCalledFunction()->getName();
-          });
-      if (itr != thread_ids.end())
-        return itr->alias;
+    if (auto intrin = thread_params->getIntrinsic(val)) {
+      if (intrin->type == IntrinsicType::id)
+        return thread_params->getAlias(intrin->dim);
     }
 
     return "";
@@ -144,15 +109,14 @@ public:
 
   Optional<int> getIVarIndex(const llvm::Value *val) const {
     if (auto itr = induction_vars.find(val); itr != induction_vars.end())
-      return (itr - induction_vars.begin()) + thread_ids.size();
+      return (itr - induction_vars.begin()) +
+             thread_params->getDimCounts().size();
 
-    if (const auto callInst = llvm::dyn_cast<llvm::CallInst>(val)) {
-      auto itr = std::ranges::find_if(
-          thread_ids, [&](const FunctionInvariants::Id &val) {
-            return val.llvm_symbol == callInst->getCalledFunction()->getName();
-          });
-      if (itr != thread_ids.end())
-        return itr - thread_ids.begin();
+    if (auto intrin = thread_params->getIntrinsic(val)) {
+      llvm::dbgs() << *thread_params << "\n"
+                   << thread_params->getAlias(intrin->dim) << "\n";
+      if (intrin->type == IntrinsicType::id)
+        return thread_params->getDimensionIndex(intrin->dim);
     }
 
     return {};
@@ -161,8 +125,7 @@ public:
   const islpp::set &getDomain() const { return domain; }
 
 private:
-  std::vector<FunctionInvariants::Id> thread_ids;
-  llvm::StringMap<int> thread_counts;
+  CudaParameters *thread_params;
   llvm::DenseSet<const llvm::Value *> invariant_loads;
   InductionVarSet induction_vars;
   islpp::set domain{"{ [] }"};
@@ -241,9 +204,10 @@ struct AccessRelations {
 
 class QuaffBuilder : public llvm::SCEVVisitor<QuaffBuilder, QuaffExpr> {
 public:
-  QuaffBuilder(LoopVariables &ri, detail::IVarDatabase &ivdb,
-               llvm::ScalarEvolution &se)
-      : ri{ri}, ivdb{ivdb}, se{se}, space{get_space(ivdb.getDomain())} {}
+  QuaffBuilder(const detail::IVarDatabase &ivdb, llvm::ScalarEvolution &se,
+               CudaParameters &params)
+      : ivdb{ivdb}, se{se}, space{get_space(ivdb.getDomain())}, intrinsics{
+                                                                    params} {}
 
   QuaffExpr visitConstant(const llvm::SCEVConstant *cint) {
     auto expr = space.constant<islpp::aff>(cint->getAPInt().getSExtValue());
@@ -381,6 +345,14 @@ public:
   }
   QuaffExpr visitUnknown(const llvm::SCEVUnknown *S) {
     const auto value = S->getValue();
+    if (auto intrin = intrinsics.getIntrinsic(value)) {
+      if (intrin->type == IntrinsicType::count) {
+        const auto count = intrinsics.getCount(intrin->dim);
+        auto expr = space.constant<islpp::aff>(count);
+        return QuaffExpr{QuaffClass::CInt, islpp::pw_aff{expr}};
+      }
+    }
+
     if (auto index = ivdb.getIVarIndex(value)) {
       auto expr =
           islpp::pw_aff{space.coeff<islpp::aff>(islpp::dim::in, *index, 1)};
@@ -394,11 +366,6 @@ public:
       auto expr = param_space.coeff<islpp::aff>(
           islpp::dim::param, dims(param_space, islpp::dim::param) - 1, 1);
       return QuaffExpr{QuaffClass::Param, islpp::pw_aff{expr}};
-    }
-
-    if (auto cint = ivdb.getConstant(value)) {
-      auto expr = space.constant<islpp::aff>(*cint);
-      return QuaffExpr{QuaffClass::CInt, islpp::pw_aff{expr}};
     }
 
     // todo
@@ -426,9 +393,9 @@ public:
   }
 
 private:
-  LoopVariables &ri;
-  detail::IVarDatabase &ivdb;
+  const detail::IVarDatabase &ivdb;
   llvm::ScalarEvolution &se;
+  CudaParameters &intrinsics;
   islpp::space space;
 };
 
@@ -541,18 +508,18 @@ class PscopBuilder {
 public:
   PscopBuilder(RegionInfo &ri, LoopInfo &li, ScalarEvolution &se,
                DominatorTree &dom_tree, PostDominatorTree &pdt,
-               StatementDetection &sbd)
-      : region_info{ri}, loop_info{li},
-        scalar_evo{se}, stmt_info{sbd}, dom_tree{dom_tree}, post_dom{pdt} {}
+               StatementDetection &sbd, CudaParameters &dd)
+      : region_info{ri}, loop_info{li}, scalar_evo{se}, stmt_info{sbd},
+        dom_tree{dom_tree}, post_dom{pdt}, dimension_detection{dd} {}
 
   // take in value by non-const because the SCEV guy doesn't know what const
   // correctness is
   Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
-                                         LoopVariables &invariants) {
+                                         const LoopVariables &invariants) {
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
     // llvm::dbgs() << "scev dump: ";
     // scev->dump();
-    QuaffBuilder builder{invariants, invariants, scalar_evo};
+    QuaffBuilder builder{invariants, scalar_evo, dimension_detection};
 
     auto ret = builder.visit(scev);
     return ret ? ret : Optional<QuaffExpr>{};
@@ -561,8 +528,8 @@ public:
   Pscop build(Function &f) {
     using namespace islpp;
     // stmt_info.dump(llvm::dbgs());
-    auto fn_analysis = detectFunctionInvariants(f);
-    auto loop_analysis = affinateRegions(f, fn_analysis);
+    auto fn_analysis = detectFunctionInvariants(f, dimension_detection);
+    auto loop_analysis = affinateRegions(f, fn_analysis, dimension_detection);
     auto bb_analysis = affinateConstraints(f, loop_analysis);
     auto statement_domain = buildDomain(f, bb_analysis);
     auto distribution_schedule = buildDistributionSchedule(
@@ -585,38 +552,21 @@ public:
     };
   }
 
-  FunctionInvariants detectFunctionInvariants(Function &f) {
-    OracleData oracle;
-
-    auto intrinsics = vector<FunctionInvariants::Id>{
-        {"llvm.nvvm.read.ptx.sreg.ctaid.x", "ctaidx",
-         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "ctaidx",
-                                oracle.ncta.x)}},
-        // {"llvm.nvvm.read.ptx.sreg.tid.y", "tidy",
-        //  islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidy",
-        //                         oracle.ntid.y)}},
-        {"llvm.nvvm.read.ptx.sreg.tid.x", "tidx",
-         islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}", "tidx",
-                                oracle.ntid.x)}},
-    };
-
-    auto counts = vector<FunctionInvariants::Count>{
-        {"llvm.nvvm.read.ptx.sreg.ncta.x", oracle.ncta.x},
-        {"llvm.nvvm.read.ptx.sreg.ncta.y", oracle.ncta.y},
-        {"llvm.nvvm.read.ptx.sreg.ntid.x", oracle.ntid.x},
-        {"llvm.nvvm.read.ptx.sreg.ntid.y", oracle.ntid.y},
-    };
+  FunctionInvariants detectFunctionInvariants(Function &f, CudaParameters &dd) {
 
     islpp::set domain = ([&]() {
       islpp::set ret{" { [] } "};
-      for (auto &elem : intrinsics)
-        ret = flat_cross(ret, elem.domain);
+      for (auto &[dim, count] : dd.getDimCounts()) {
+        auto s = islpp::set{fmt::format("{{ [{0}] : 0 <= {0} < {1} }}",
+                                        dd.getAlias(dim), count)};
+        ret = flat_cross(ret, std::move(s));
+      }
       return ret;
     })();
 
     islpp::multi_aff block_getter = ([&]() -> islpp::multi_aff {
       auto domain_space = get_space(domain);
-      auto gid_count = 1;
+      auto gid_count = dd.getGridDims();
 
       vector<islpp::aff> affs;
       affs.reserve(gid_count);
@@ -629,7 +579,7 @@ public:
 
     islpp::multi_aff thread_getter = ([&]() -> islpp::multi_aff {
       auto domain_space = get_space(domain);
-      auto gid_count = 1;
+      auto gid_count = dd.getGridDims();
       auto max = dims(domain, islpp::dim::set);
 
       vector<islpp::aff> affs;
@@ -641,16 +591,14 @@ public:
       return flat_range_product(affs);
     })();
 
-    // llvm::dbgs() << "tidget" << thread_getter << "\n";
-
     auto warpid_getter = islpp::map{fmt::format(
-        "{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", oracle.warpSize)};
+        "{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", dd.warpSize)};
     auto lane_id_getter = islpp::map{
-        fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", oracle.warpSize)};
+        fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", dd.warpSize)};
 
     auto warp_tuple_getter = islpp::map{
         fmt::format("{{ [{0}] -> [ [floor( {0} / {1} )] -> [{0} mod {1}] ] }} ",
-                    "tidx", oracle.warpSize)};
+                    "tidx", dd.warpSize)};
 
     auto wl_to_warp = islpp::map{
         fmt::format("{{ [[{0}] -> [{1}]] -> [ {0} ] }} ", "wid", "lid")};
@@ -658,9 +606,7 @@ public:
     auto wl_to_lane = islpp::map{
         fmt::format("{{ [[{0}] -> [{1}]] -> [ {1} ] }} ", "wid", "lid")};
 
-    return FunctionInvariants{.tid_intrinsics = intrinsics,
-                              .ntid_intrinsics = counts,
-                              .distribution_domain = domain,
+    return FunctionInvariants{.distribution_domain = domain,
                               .getCtaId = block_getter,
                               .getThreadId = thread_getter,
                               .getWarpLaneTuple = warp_tuple_getter,
@@ -668,20 +614,21 @@ public:
                               .warpTupleToLane = wl_to_lane};
   }
 
-  LoopInstanceVars affinateRegions(Function &f,
-                                   FunctionInvariants &fn_analysis) {
+  LoopInstanceVars affinateRegions(Function &f, FunctionInvariants &fn_analysis,
+                                   CudaParameters &di) {
     using namespace islpp;
     LoopInstanceVars loop_to_instances;
 
-    loop_to_instances[nullptr] = ([&]() {
-      auto top_level_region_invar = LoopVariables();
-      top_level_region_invar.addFunctionAnalysis(fn_analysis);
+    loop_to_instances.try_emplace(
+        nullptr, ([&]() {
+          auto top_level_region_invar = LoopVariables(di);
+          top_level_region_invar.addFunctionAnalysis(fn_analysis);
 
-      for (auto &arg : f.args())
-        top_level_region_invar.addInvariantLoad(&arg); // todo: globals
+          for (auto &arg : f.args())
+            top_level_region_invar.addInvariantLoad(&arg); // todo: globals
 
-      return top_level_region_invar;
-    })();
+          return top_level_region_invar;
+        })());
 
     bfs(&f.getEntryBlock(), [&](llvm::BasicBlock *visit) {
       auto loop = loop_info.getLoopFor(visit);
@@ -739,7 +686,8 @@ public:
     return loop_to_instances;
   }
 
-  BBAnalysis affinateConstraints(Function &f, LoopInstanceVars &loop_analysis) {
+  BBAnalysis affinateConstraints(Function &f,
+                                 const LoopInstanceVars &loop_analysis) {
     BBAnalysis bb_analysis;
 
     // we generate constraint sets for all ICmpInstructions
@@ -750,8 +698,8 @@ public:
     DenseMap<llvm::BasicBlock *, const llvm::BranchInst *> branching_bbs;
 
     for (auto &bb : f) {
-      bb_analysis[&bb] =
-          BBInvariants{loop_analysis[loop_info.getLoopFor(&bb)].getDomain()};
+      bb_analysis[&bb] = BBInvariants{
+          loop_analysis.find(loop_info.getLoopFor(&bb))->second.getDomain()};
 
       for (auto &instr : bb) {
         if (const auto icmp = llvm::dyn_cast_or_null<llvm::ICmpInst>(&instr))
@@ -774,7 +722,7 @@ public:
     DenseMap<const llvm::ICmpInst *, islpp::set> cmp_constraints;
     for (auto [icmp, bb] : cmps) {
       auto loop = loop_info.getLoopFor(bb);
-      auto &region_inv = loop_analysis[loop];
+      auto &region_inv = loop_analysis.find(loop)->second;
 
       const auto lhs =
           getQuasiaffineForm(*icmp->getOperand(0), loop, region_inv);
@@ -957,7 +905,7 @@ public:
     return domain_intersect(ret, range(statement_domain));
   }
 
-  AccessRelations buildAccessRelations(LoopInstanceVars &loop_analysis,
+  AccessRelations buildAccessRelations(const LoopInstanceVars &loop_analysis,
                                        BBAnalysis &bb_analysis) {
     islpp::union_map writes{"{}"};
     islpp::union_map reads{"{}"};
@@ -967,7 +915,7 @@ public:
       // now we generate our access relations, visiting all loads and
       // stores, separated by sync block
       auto loop = loop_info.getLoopFor(visit);
-      auto &loop_domain = loop_analysis[loop];
+      auto &loop_domain = loop_analysis.find(loop)->getSecond();
 
       for (auto &statement : stmt_info.iterateStatements(*visit)) {
         if (const auto mem_access =
@@ -1177,6 +1125,7 @@ public:
   }
 
 private:
+  CudaParameters &dimension_detection;
   RegionInfo &region_info;
   LoopInfo &loop_info;
   ScalarEvolution &scalar_evo;
@@ -1194,7 +1143,8 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
                        fam.getResult<llvm::ScalarEvolutionAnalysis>(f),
                        fam.getResult<llvm::DominatorTreeAnalysis>(f),
                        fam.getResult<llvm::PostDominatorTreeAnalysis>(f),
-                       fam.getResult<golly::StatementDetectionPass>(f)};
+                       fam.getResult<golly::StatementDetectionPass>(f),
+                       fam.getResult<golly::CudaParameterDetection>(f)};
 
   if (f.getName() == "_Z10__syncwarpj") {
     return Pscop{
