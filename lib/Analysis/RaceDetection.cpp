@@ -104,7 +104,7 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
     auto conflicting_statements =
         unwrap(range(unwrap(domain(conflicting_syncs))));
 
-    for_each(conflicting_statements, [&](const islpp::map &sampl) -> isl_stat {
+    for_each(conflicting_statements, [&](const islpp::map &sampl) {
       auto write_name = islpp::name(sampl, islpp::dim::in);
 
       auto write_stmt = stmt_info.getStatement(write_name);
@@ -145,7 +145,6 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
                      << sample(range(single_pair)) << "\n";
 
         llvm::errs() << sampl << "\n";
-        return isl_stat_ok;
       }
     });
   }

@@ -408,7 +408,13 @@ template <typename Fn> void for_each(const union_set &us, Fn &&fn) {
   isl_union_set_foreach_set(
       us.get(),
       +[](isl_set *st, void *user) -> isl_stat {
-        return (*static_cast<Fn *>(user))(set{st});
+        using Ret = std::invoke_result_t<Fn, set>;
+        if constexpr (std::is_same_v<Ret, isl_stat>)
+          return (*static_cast<Fn *>(user))(set{st});
+        else {
+          (*static_cast<Fn *>(user))(set{st});
+          return isl_stat_ok;
+        }
       },
       &fn);
 }
@@ -417,7 +423,13 @@ template <typename Fn> void for_each(const union_map &us, Fn &&fn) {
   isl_union_map_foreach_map(
       us.get(),
       +[](isl_map *st, void *user) -> isl_stat {
-        return (*static_cast<Fn *>(user))(map{st});
+        using Ret = std::invoke_result_t<Fn, map>;
+        if constexpr (std::is_same_v<Ret, isl_stat>)
+          return (*static_cast<Fn *>(user))(map{st});
+        else {
+          (*static_cast<Fn *>(user))(map{st});
+          return isl_stat_ok;
+        }
       },
       &fn);
 }
@@ -426,7 +438,13 @@ template <typename Fn> void scan(const union_set &us, Fn &&fn) {
   isl_union_set_foreach_point(
       us.get(),
       +[](isl_point *pt, void *user) -> isl_stat {
-        return (*static_cast<Fn *>(user))(point{pt});
+        using Ret = std::invoke_result_t<Fn, point>;
+        if constexpr (std::is_same_v<Ret, isl_stat>)
+          return (*static_cast<Fn *>(user))(point{pt});
+        else {
+          (*static_cast<Fn *>(user))(point{pt});
+          return isl_stat_ok;
+        }
       },
       &fn);
 }
@@ -434,7 +452,13 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
   isl_set_foreach_point(
       us.get(),
       +[](isl_point *pt, void *user) -> isl_stat {
-        return (*static_cast<Fn *>(user))(point{pt});
+        using Ret = std::invoke_result_t<Fn, point>;
+        if constexpr (std::is_same_v<Ret, isl_stat>)
+          return (*static_cast<Fn *>(user))(point{pt});
+        else {
+          (*static_cast<Fn *>(user))(point{pt});
+          return isl_stat_ok;
+        }
       },
       &fn);
 }

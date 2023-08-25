@@ -447,9 +447,8 @@ public:
                               warp_lane_to_thread);
 
       auto sum = islpp::union_set{"{}"};
-      for_each(vals, [&](islpp::map m) -> isl_stat {
+      for_each(vals, [&](islpp::map m) {
         sum = sum + islpp::union_set{flatten(wrap(m))};
-        return isl_stat_ok;
       });
       return sum;
     })();

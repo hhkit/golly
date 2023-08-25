@@ -165,9 +165,7 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   IntrinsicFinder visitor{b};
   visitor.visit(f);
 
-  b.addSize(Dimension::ctaX, 1)
-      .addSize(Dimension::threadX, 16)
-      .addSize(Dimension::threadY, 16);
+  b.addSize(Dimension::threadX, 16).addSize(Dimension::threadY, 16);
 
   return b.build();
 }
