@@ -1,11 +1,17 @@
+#include <charconv>
+#include <ctre-unicode.hpp>
 #include <fmt/format.h>
 #include <golly/Analysis/CudaParameterDetection.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/IR/InstVisitor.h>
+#include <llvm/Support/CommandLine.h>
+#include <variant>
 
 namespace golly {
 
 using llvm::StringMap;
+
+bool is_grid_dim(Dimension d) { return d <= Dimension::ctaZ; }
 
 const static StringMap<Intrinsic> intrinsicLut{
     {"llvm.nvvm.read.ptx.sreg.tid.x",
@@ -36,9 +42,98 @@ const static StringMap<Intrinsic> intrinsicLut{
 
 const static std::map<Dimension, string_view> dimensionAliasLut{
     {Dimension::ctaX, "ctaidX"},  {Dimension::ctaY, "ctaidY"},
-    {Dimension::ctaX, "ctaidZ"},  {Dimension::threadX, "tidX"},
-    {Dimension::threadY, "tidY"}, {Dimension::threadX, "tidZ"},
+    {Dimension::ctaZ, "ctaidZ"},  {Dimension::threadX, "tidX"},
+    {Dimension::threadY, "tidY"}, {Dimension::threadZ, "tidZ"},
 };
+
+namespace cl = llvm::cl;
+
+struct dim3 {
+  Optional<int> x, y, z;
+
+  explicit operator bool() const { return x || y || z; }
+};
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const dim3 &d) {
+  if (!d)
+    return os << "none";
+
+  if (d.x)
+    os << d.x << " ";
+  if (d.y)
+    os << d.y << " ";
+  if (d.z)
+    os << d.z << " ";
+  return os;
+}
+
+class CudaParameters::Builder {
+public:
+  Builder &addUsage(const llvm::Value *val, Intrinsic in);
+  Builder &addParameter(Intrinsic in);
+  Builder &addSize(Dimension in, int count);
+
+  int block_dims_specified() const {
+    return std::ranges::count_if(wip.getDimCounts(), [](const auto &v) {
+      return !is_grid_dim(v.first);
+    });
+  }
+  int grid_dims_specified() const {
+    return std::ranges::count_if(
+        wip.getDimCounts(), [](const auto &v) { return is_grid_dim(v.first); });
+  }
+  CudaParameters build();
+
+private:
+  CudaParameters wip;
+};
+
+struct DimParser : cl::parser<dim3> {
+  using cl::parser<dim3>::parser;
+
+  bool parse(cl::Option &O, llvm::StringRef ArgName, llvm::StringRef argValue,
+             dim3 &Val) {
+    using namespace ctre;
+
+    if (auto [whole, xs, ys, zs] =
+            ctre::match<"\\[(\\d+),(\\d+),(\\d+)\\]">(argValue);
+        whole) {
+      int x, y, z;
+      std::from_chars(xs.begin(), xs.end(), x);
+      std::from_chars(ys.begin(), ys.end(), y);
+      std::from_chars(zs.begin(), zs.end(), z);
+      Val.x = x;
+      Val.y = y;
+      Val.z = z;
+      return false;
+    };
+
+    if (auto [whole, xs, ys] = ctre::match<"\\[(\\d+),(\\d+)\\]">(argValue);
+        whole) {
+      int x, y;
+      std::from_chars(xs.begin(), xs.end(), x);
+      std::from_chars(ys.begin(), ys.end(), y);
+      Val.x = x;
+      Val.y = y;
+      return false;
+    };
+
+    if (auto [whole, xs] = ctre::match<"(\\d+)">(argValue); whole) {
+      int x;
+      std::from_chars(xs.begin(), xs.end(), x);
+      Val.x = x;
+      return false;
+    };
+    return false;
+  }
+};
+
+static cl::opt<dim3, false, DimParser> gridDims("golly-grid-dims",
+                                                cl::desc("Grid dimensions"),
+                                                cl::value_desc("x | (x,y,z)"));
+static cl::opt<dim3, false, DimParser> blockDims("golly-block-dims",
+                                                 cl::desc("Block dimensions"),
+                                                 cl::value_desc("x | (x,y,z)"));
 
 Optional<Intrinsic> CudaParameters::getIntrinsic(const llvm::Value *val) const {
   if (auto itr = detections.find(val); itr != detections.end())
@@ -114,17 +209,12 @@ CudaParameters CudaParameters::Builder::build() {
   {
     int grid_dims = 0;
     for (auto &[dim, count] : wip.dim_count) {
-      if (dim <= Dimension::ctaZ)
+      if (is_grid_dim(dim))
         grid_dims++;
       else
         break;
     }
 
-    // if grid is not used, assume grid of (1,1,1)
-    if (grid_dims == 0) {
-      addParameter(Intrinsic{Dimension::ctaX, IntrinsicType::id});
-      grid_dims = 1;
-    }
     wip.grid_dim_count = grid_dims;
   }
 
@@ -143,6 +233,10 @@ CudaParameters CudaParameters::Builder::build() {
 void CudaParameters::dump(llvm::raw_ostream &os) const {
   for (auto [instr, intrin] : detections) {
     os << *instr << " -> " << getAlias(intrin.dim) << "\n";
+  }
+
+  for (auto [dim, count] : dim_count) {
+    os << getAlias(dim) << " -> " << count << "\n";
   }
 
   if (finalized) {
@@ -165,7 +259,36 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   IntrinsicFinder visitor{b};
   visitor.visit(f);
 
-  b.addSize(Dimension::threadX, 16).addSize(Dimension::threadY, 16);
+  // llvm::dbgs() << "block dims: " << blockDims.getValue() << "\n";
+  // llvm::dbgs() << "grid dims: " << gridDims.getValue() << "\n";
+
+  if (blockDims) {
+    // oracle provided
+    if (blockDims.x)
+      b.addSize(Dimension::threadX, *blockDims.x);
+    if (blockDims.y)
+      b.addSize(Dimension::threadY, *blockDims.y);
+    if (blockDims.z)
+      b.addSize(Dimension::threadZ, *blockDims.z);
+  } else {
+    // no oracle provided
+    // making a guess based on intrinsics used
+    b.addSize(Dimension::threadX, 32).addSize(Dimension::threadY, 8);
+  }
+
+  if (gridDims) {
+    // oracle provided
+    if (gridDims.x)
+      b.addSize(Dimension::ctaX, *gridDims.x);
+    if (gridDims.y)
+      b.addSize(Dimension::ctaY, *gridDims.y);
+    if (gridDims.z)
+      b.addSize(Dimension::ctaZ, *gridDims.z);
+  } else {
+    // no oracle provided
+    // making a guess based on intrinsics used
+    b.addSize(Dimension::ctaX, 1);
+  }
 
   return b.build();
 }

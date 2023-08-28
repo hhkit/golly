@@ -571,6 +571,8 @@ public:
       return ret;
     })();
 
+    llvm::dbgs() << "DOMAIN: " << dd << "\n" << domain << "\n";
+
     islpp::multi_aff block_getter = ([&]() -> islpp::multi_aff {
       auto domain_space = get_space(domain);
       auto gid_count = dd.getGridDims();
@@ -607,7 +609,7 @@ public:
       islpp::aff res = domain_space.zero<islpp::aff>();
 
       for (auto [dim, count] : dd.getDimCounts()) {
-        if (dim >= Dimension::threadX) {
+        if (!is_grid_dim(dim)) {
           res = res +
                 domain_space.coeff<islpp::aff>(islpp::dim::in, index, dim_size);
           dim_size *= count;

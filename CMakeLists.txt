@@ -28,7 +28,7 @@ FetchContent_Declare(fmt
   )
 FetchContent_MakeAvailable(fmt)
 
-include_directories(${LLVM_INCLUDE_DIRS} ${ISL_INCLUDE_DIRS} include)
+include_directories(${LLVM_INCLUDE_DIRS} ${ISL_INCLUDE_DIRS} deps/compile-time-regular-expressions/single-header include)
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 

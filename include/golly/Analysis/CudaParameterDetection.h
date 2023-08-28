@@ -39,6 +39,8 @@ enum class Dimension : short {
   threadZ,
 };
 
+bool is_grid_dim(Dimension);
+
 struct Intrinsic {
   Dimension dim;
   IntrinsicType type;
@@ -71,17 +73,6 @@ private:
   bool finalized = false;
 
   friend class Builder;
-};
-
-class CudaParameters::Builder {
-public:
-  Builder &addUsage(const llvm::Value *val, Intrinsic in);
-  Builder &addParameter(Intrinsic in);
-  Builder &addSize(Dimension in, int count);
-  CudaParameters build();
-
-private:
-  CudaParameters wip;
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const CudaParameters &di);

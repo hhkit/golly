@@ -1,0 +1,7 @@
+#!/bin/sh
+
+TEST=tests/canon/3DConvolution-cuda-nvptx64-nvidia-cuda-sm_35.ll
+GRID_DIMS=--golly-grid-dims=[1,1]
+BLOCK_DIMS=--golly-block-dims=[32,8]
+
+opt -load ./build/lib/golly.so --load-pass-plugin=./build/lib/golly.so --passes=golly -disable-output $GRID_DIMS $BLOCK_DIMS -- $TEST
