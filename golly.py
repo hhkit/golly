@@ -3,6 +3,7 @@ import subprocess as sp
 import io
 import uuid
 import argparse
+import tempfile
 
 golly_path = "./build/lib/golly.so"
 
@@ -16,6 +17,7 @@ def compile(filename: path.Path, workdir: path.Path):
             "-fno-discard-value-names",
             "-S",
             "-emit-llvm",
+            "--cuda-gpu-arch=sm_60",
             "-Xclang",
             "-disable-O0-optnone",
             filename.resolve(),
@@ -60,7 +62,6 @@ def analyze(file: path.Path, blockDim: str, gridDim: str):
 parser = argparse.ArgumentParser(
     prog="Golly",
     description="Polyhedral CUDA Analyzer",
-    epilog="Please direct all issues to Ivan Ho, National University of Singapore [hhkit@nus.edu.sg]",
 )
 
 parser.add_argument("filename")
@@ -71,7 +72,7 @@ parser.add_argument("--gridDim", help="Grid dimensions, specify [x,y,z] | [x,y] 
 
 args = parser.parse_args()
 
-workdir = path.Path(f"/tmp/golly/{uuid.uuid4()}")
+workdir = path.Path(f"/{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
 cu_file = path.Path(args.filename)
 ll_file = cu_file.with_suffix(".ll")
 

@@ -118,6 +118,13 @@ struct DimParser : cl::parser<dim3> {
       return false;
     };
 
+    if (auto [whole, xs] = ctre::match<"\\[(\\d+)\\]">(argValue); whole) {
+      int x;
+      std::from_chars(xs.begin(), xs.end(), x);
+      Val.x = x;
+      return false;
+    };
+
     if (auto [whole, xs] = ctre::match<"(\\d+)">(argValue); whole) {
       int x;
       std::from_chars(xs.begin(), xs.end(), x);

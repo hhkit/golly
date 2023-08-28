@@ -1,4 +1,4 @@
 __global__ void warp_sync() {
-  if (threadIdx.x < 32)
+  if (threadIdx.x < 16)
     __syncwarp();
 }
