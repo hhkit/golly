@@ -152,7 +152,7 @@ const std::map<Dimension, int> &CudaParameters::getDimCounts() const {
   return dim_count;
 }
 
-string_view CudaParameters::getAlias(Dimension dim) const {
+string_view CudaParameters::getAlias(Dimension dim) {
   return dimensionAliasLut.at(dim);
 }
 

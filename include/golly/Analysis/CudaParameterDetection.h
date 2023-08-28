@@ -57,7 +57,7 @@ public:
   int getCount(Dimension dim) const;
   const std::map<Dimension, int> &getDimCounts() const;
 
-  string_view getAlias(Dimension dim) const;
+  static string_view getAlias(Dimension dim);
 
   int getGridDims() const;
   int getBlockDims() const;

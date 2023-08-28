@@ -70,8 +70,14 @@ public:
 
   void addInvariantLoad(const llvm::Value *val) { invariant_loads.insert(val); }
 
+  void addPointerArgument(const llvm::Value *val) { pointer_args.insert(val); }
+
   bool isInvariantLoad(const llvm::Value *val) const {
     return invariant_loads.contains(val);
+  }
+
+  bool isPointerArgument(const llvm::Value *val) const {
+    return pointer_args.contains(val);
   }
 
   void addConstraint(islpp::set constraining_set) {
@@ -118,6 +124,7 @@ public:
 private:
   CudaParameters *thread_params;
   llvm::DenseSet<const llvm::Value *> invariant_loads;
+  llvm::DenseSet<const llvm::Value *> pointer_args;
   InductionVarSet induction_vars;
   islpp::set domain{"{ [] }"};
 
@@ -148,10 +155,18 @@ class QuaffExpr {
 public:
   QuaffClass type;
   islpp::pw_aff expr{"{ [] -> [0] }"};
-  vector<string> params;
+  string name;
 
   bool isValid() const { return type != QuaffClass::Invalid; }
   explicit operator bool() const { return isValid(); }
+
+  static Optional<string> mergeNames(const QuaffExpr &lhs,
+                                     const QuaffExpr &rhs) {
+    if (lhs.name.length() > 0 && rhs.name.length() > 0)
+      return {};
+
+    return lhs.name.length() > 0 ? lhs.name : rhs.name;
+  }
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
@@ -216,6 +231,12 @@ public:
     // check for invalid
     auto newClass = std::max(lhs.type, rhs.type);
 
+    auto newName = QuaffExpr::mergeNames(lhs, rhs);
+
+    if (!newName)
+      return QuaffExpr{QuaffClass::Invalid};
+    ;
+
     if (newClass == QuaffClass::Invalid)
       return QuaffExpr{QuaffClass::Invalid};
 
@@ -237,7 +258,7 @@ public:
 
     // lhs must be CInt
     // always valid
-    return QuaffExpr(rhs.type, lhs.expr * rhs.expr);
+    return QuaffExpr(rhs.type, lhs.expr * rhs.expr, *newName);
   }
 
   QuaffExpr visitPtrToIntExpr(const llvm::SCEVPtrToIntExpr *S) {
@@ -312,7 +333,7 @@ public:
         // by indvar are invalid
         return QuaffExpr{QuaffClass::Invalid};
 
-      return QuaffExpr{QuaffClass::IVar, step.expr * loop_expr};
+      return QuaffExpr{QuaffClass::IVar, step.expr * loop_expr, step.name};
     }
 
     auto zero_start = se.getAddRecExpr(se.getConstant(start->getType(), 0),
@@ -327,7 +348,12 @@ public:
     if (ret_type == QuaffClass::Invalid)
       return QuaffExpr{QuaffClass::Invalid};
 
-    return QuaffExpr{ret_type, res_expr.expr + start_expr.expr};
+    auto new_name = QuaffExpr::mergeNames(res_expr, start_expr);
+
+    if (!new_name)
+      return QuaffExpr{QuaffClass::Invalid};
+
+    return QuaffExpr{ret_type, res_expr.expr + start_expr.expr, *new_name};
   }
 
   QuaffExpr visitSequentialUMinExpr(const llvm::SCEVSequentialUMinExpr *S) {
@@ -348,6 +374,12 @@ public:
       auto expr =
           islpp::pw_aff{space.coeff<islpp::aff>(islpp::dim::in, *index, 1)};
       return QuaffExpr{QuaffClass::IVar, islpp::pw_aff{expr}};
+    }
+
+    if (ivdb.isPointerArgument(value)) {
+      auto ptr_name = value->getName();
+      auto expr = space.zero<islpp::aff>();
+      return QuaffExpr{QuaffClass::CInt, islpp::pw_aff{expr}, ptr_name.str()};
     }
 
     if (ivdb.isInvariantLoad(value)) {
@@ -378,7 +410,11 @@ public:
       if (newClass == QuaffClass::Invalid)
         return QuaffExpr{QuaffClass::Invalid};
 
-      val = QuaffExpr{newClass, fn(val.expr, inVal.expr)};
+      auto newName = QuaffExpr::mergeNames(val, inVal);
+      if (newName)
+        val = QuaffExpr{newClass, fn(val.expr, inVal.expr), *newName};
+      else
+        return QuaffExpr{QuaffClass::Invalid};
     }
     return val;
   }
@@ -491,6 +527,81 @@ private:
   const FunctionInvariants &fn;
 };
 
+struct ConditionVisitor {
+  using Base = llvm::InstVisitor<ConditionVisitor, Optional<islpp::set>>;
+  const DenseMap<const llvm::ICmpInst *, islpp::set> &cmp_constraints;
+  ConditionVisitor(
+      const DenseMap<const llvm::ICmpInst *, islpp::set> &cmp_constraints)
+      : cmp_constraints{cmp_constraints} {}
+
+  auto visitICmpInst(const llvm::ICmpInst *cmp) const -> Optional<islpp::set> {
+
+    if (auto itr = cmp_constraints.find(cmp); itr != cmp_constraints.end()) {
+      // llvm::dbgs() << "icmp " << itr->second << " : << " << *cmp << "\n";
+      return itr->second;
+    } else
+      return {};
+  };
+
+  // is combination
+  auto visitSelectInst(const llvm::SelectInst *select) -> Optional<islpp::set> {
+    auto cond = visit(select->getCondition());
+    auto lhs = visit(select->getTrueValue());
+    auto rhs = visit(select->getFalseValue());
+
+    if (cond && lhs) {
+      // hack for now
+      // llvm::dbgs() << "select " << *cond * *lhs << " : << " << *select <<
+      // "\n";
+      return *cond * *lhs;
+    }
+    return {};
+  }
+
+  auto visitAnd(const llvm::BinaryOperator *binop) -> Optional<islpp::set> {
+    auto lhs = visit(binop->getOperand(0));
+    auto rhs = visit(binop->getOperand(1));
+
+    if (lhs && rhs) {
+      // llvm::dbgs() << "and " << *lhs * *rhs << " : << " << *binop << "\n";
+      return *lhs * *rhs;
+    }
+    return {};
+  }
+
+  auto visitOr(const llvm::BinaryOperator *binop) -> Optional<islpp::set> {
+    auto lhs = visit(binop->getOperand(0));
+    auto rhs = visit(binop->getOperand(1));
+
+    if (lhs && rhs) {
+      // llvm::dbgs() << "or " << *lhs + *rhs << " : << " << *binop << "\n";
+      return *lhs + *rhs;
+    }
+    return {};
+  }
+
+  auto visit(const llvm::Value *val) -> Optional<islpp::set> {
+    if (auto icmp = llvm::dyn_cast_or_null<llvm::ICmpInst>(val))
+      return visitICmpInst(icmp);
+    if (auto select = llvm::dyn_cast_or_null<llvm::SelectInst>(val))
+      return visitSelectInst(select);
+
+    if (auto binop = llvm::dyn_cast_or_null<llvm::BinaryOperator>(val)) {
+      // is an and
+      switch (binop->getOpcode()) {
+
+      case llvm::Instruction::And:
+        return visitAnd(binop);
+      case llvm::Instruction::Or:
+        return visitOr(binop);
+      default:
+        break;
+      }
+    }
+    return {};
+  }
+};
+
 class PscopBuilder {
   using LoopInstanceVars = DenseMap<const llvm::Loop *, LoopVariables>;
   using BBAnalysis = DenseMap<const llvm::BasicBlock *, BBInvariants>;
@@ -502,17 +613,29 @@ public:
       : region_info{ri}, loop_info{li}, scalar_evo{se}, stmt_info{sbd},
         dom_tree{dom_tree}, post_dom{pdt}, dimension_detection{dd} {}
 
-  // take in value by non-const because the SCEV guy doesn't know what const
-  // correctness is
-  Optional<QuaffExpr> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
-                                         const LoopVariables &invariants) {
+  // take in value by non-const because the SCEV guy doesn't know
+  // what const correctness is
+  Optional<islpp::pw_aff> getQuasiaffineForm(llvm::Value &val, llvm::Loop *loop,
+                                             const LoopVariables &invariants) {
     auto scev = scalar_evo.getSCEVAtScope(&val, loop);
     // llvm::dbgs() << "scev dump: ";
     // scev->dump();
     QuaffBuilder builder{invariants, scalar_evo, dimension_detection};
 
     auto ret = builder.visit(scev);
-    return ret ? ret : Optional<QuaffExpr>{};
+    return ret ? islpp::pw_aff{ret.expr} : Optional<islpp::pw_aff>{};
+  }
+
+  Optional<islpp::map> getQuasiaffineLoad(llvm::Value &val, llvm::Loop *loop,
+                                          const LoopVariables &invariants) {
+    auto scev = scalar_evo.getSCEVAtScope(&val, loop);
+    // llvm::dbgs() << "scev dump: ";
+    // scev->dump();
+    QuaffBuilder builder{invariants, scalar_evo, dimension_detection};
+
+    auto ret = builder.visit(scev);
+    return ret ? name(islpp::map{ret.expr}, islpp::dim::out, ret.name)
+               : Optional<islpp::map>{};
   }
 
 #undef LLVM_DEBUG
@@ -547,7 +670,8 @@ public:
         temporal_schedule, bb_analysis);
 
     LLVM_DEBUG(llvm::dbgs() << "Access relation construction\n");
-    auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
+    auto access_relations =
+        buildAccessRelations(statement_domain, loop_analysis, bb_analysis);
 
     return Pscop{
         .instantiation_domain = coalesce(statement_domain),
@@ -570,8 +694,6 @@ public:
       }
       return ret;
     })();
-
-    llvm::dbgs() << "DOMAIN: " << dd << "\n" << domain << "\n";
 
     islpp::multi_aff block_getter = ([&]() -> islpp::multi_aff {
       auto domain_space = get_space(domain);
@@ -620,11 +742,11 @@ public:
       return islpp::map{res};
     })();
 
-    auto warp_tuple_getter = apply_range(
-        flat_index_getter,
-        islpp::map{fmt::format(
-            "{{ [{0}] -> [ [floor( {0} / {1} )] -> [{0} mod {1}] ] }} ", "tidx",
-            dd.warpSize)});
+    auto warp_tuple_getter =
+        apply_range(flat_index_getter,
+                    islpp::map{fmt::format("{{ [{0}] -> [ [floor( {0} / {1} )] "
+                                           "-> [{0} mod {1}] ] }} ",
+                                           "tidx", dd.warpSize)});
 
     auto wl_to_warp = islpp::map{
         fmt::format("{{ [[{0}] -> [{1}]] -> [ {0} ] }} ", "wid", "lid")};
@@ -650,9 +772,12 @@ public:
           auto top_level_region_invar = LoopVariables(di);
           top_level_region_invar.addFunctionAnalysis(fn_analysis);
 
-          for (auto &arg : f.args())
-            top_level_region_invar.addInvariantLoad(&arg); // todo: globals
-
+          for (auto &arg : f.args()) {
+            if (arg.getType()->isPointerTy())
+              top_level_region_invar.addPointerArgument(&arg); // todo: globals
+            else
+              top_level_region_invar.addInvariantLoad(&arg);
+          }
           return top_level_region_invar;
         })());
 
@@ -680,16 +805,18 @@ public:
           const auto fin_aff = getQuasiaffineForm(fin, parent_loop, parent);
 
           if (init_aff && fin_aff) {
-            // if so, add the iteration variable into our iteration domain
+            // if so, add the iteration variable into our iteration
+            // domain
             const auto loopVar = loop->getCanonicalInductionVariable();
             invariants.addInductionVariable(loopVar);
 
-            // hacky, but we will reevaluate our init and final exprs to
-            // update the expression space
-            auto i = getQuasiaffineForm(init, loop, invariants)->expr;
-            auto f = getQuasiaffineForm(fin, loop, invariants)->expr;
+            // hacky, but we will reevaluate our init and final
+            // exprs to update the expression space
+            auto i = *getQuasiaffineForm(init, loop, invariants);
+            auto f = *getQuasiaffineForm(fin, loop, invariants);
 
-            // we generate an identity function for the newly added variable
+            // we generate an identity function for the newly added
+            // variable
             auto domain_space = islpp::get_space(invariants.getDomain());
 
             auto ident = islpp::pw_aff{domain_space.coeff<islpp::aff>(
@@ -718,8 +845,8 @@ public:
     BBAnalysis bb_analysis;
 
     // we generate constraint sets for all ICmpInstructions
-    // since we know all indvars, we know which cmps are valid and which are
-    // not
+    // since we know all indvars, we know which cmps are valid and
+    // which are not
     DenseMap<const llvm::ICmpInst *, llvm::BasicBlock *> cmps;
     DenseMap<const llvm::BranchInst *, llvm::BasicBlock *> branches;
     DenseMap<llvm::BasicBlock *, const llvm::BranchInst *> branching_bbs;
@@ -760,25 +887,25 @@ public:
         const auto constraint = ([&]() -> Optional<islpp::set> {
           switch (icmp->getPredicate()) {
           case llvm::ICmpInst::ICMP_EQ:
-            return eq_set(lhs->expr, rhs->expr);
+            return eq_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_NE:
-            return -eq_set(lhs->expr, rhs->expr);
+            return -eq_set(*lhs, *rhs); // todo: probably wrong
           case llvm::ICmpInst::ICMP_SLT:
-            return lt_set(lhs->expr, rhs->expr);
+            return lt_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_SLE:
-            return le_set(lhs->expr, rhs->expr);
+            return le_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_SGT:
-            return gt_set(lhs->expr, rhs->expr);
+            return gt_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_SGE:
-            return ge_set(lhs->expr, rhs->expr);
+            return ge_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_ULT:
-            return lt_set(lhs->expr, rhs->expr);
+            return lt_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_ULE:
-            return le_set(lhs->expr, rhs->expr);
+            return le_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_UGT:
-            return gt_set(lhs->expr, rhs->expr);
+            return gt_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_UGE:
-            return ge_set(lhs->expr, rhs->expr);
+            return ge_set(*lhs, *rhs);
 
           default:
             llvm::dbgs() << "unsupported comparison";
@@ -788,14 +915,14 @@ public:
 
         if (constraint)
           cmp_constraints.try_emplace(icmp, *constraint);
-        // llvm::dbgs() << *icmp << " " << constraint << "\n";
+        llvm::dbgs() << *icmp << " " << constraint << "\n";
       } else
         llvm::dbgs() << "not affine\n";
     }
 
-    // then, we traverse the basic blocks (bfs/dfs both fine) and impose all
-    // constraints that dominate a certain bb on that bb to create that basic
-    // block's domain
+    // then, we traverse the basic blocks (bfs/dfs both fine) and
+    // impose all constraints that dominate a certain bb on that bb
+    // to create that basic block's domain
     llvm::SmallVector<llvm::BasicBlock *> pdf;
     for (auto &succeeder : f) {
       llvm::SmallPtrSet<llvm::BasicBlock *, 1> checkMe{&succeeder};
@@ -805,33 +932,32 @@ public:
 
       // we now have the pdf of succeeder
 
-      // succeeder is control-dependent on all bbs in its post-dominance
-      // frontier
+      // succeeder is control-dependent on all bbs in its
+      // post-dominance frontier
       for (auto &pd : pdf) {
 
-        // if any of these bbs are a branch that we are investigating
+        // if any of these bbs are a branch that we are
+        // investigating
         if (auto itr = branching_bbs.find(pd); itr != branching_bbs.end()) {
           auto branch = itr->second;
           if (branch->getNumSuccessors() < 2)
             continue;
 
-          const auto cmp =
-              llvm::dyn_cast_or_null<llvm::ICmpInst>(branch->getCondition());
-          if (!cmp)
-            continue;
+          const auto cond = branch->getCondition();
+          // we now generate the constraint by the condition
+          const auto constraint = ConditionVisitor{cmp_constraints}.visit(cond);
+          // llvm::dbgs() << *cond << "\n  has constraint " << constraint <<
+          // "\n";
 
-          if (auto itr = cmp_constraints.find(cmp);
-              itr != cmp_constraints.end()) {
-            const auto &constraint = itr->second;
-
+          if (constraint) {
             const auto left = branch->getSuccessor(0);
             const auto right = branch->getSuccessor(1);
             auto &analysis = bb_analysis[&succeeder];
 
             if (dom_tree.dominates(left, &succeeder))
-              analysis.applyConstraint(constraint);
+              analysis.applyConstraint(*constraint);
             else if (dom_tree.dominates(right, &succeeder))
-              analysis.applyConstraint(constraint, false);
+              analysis.applyConstraint(*constraint, false);
           }
         }
       }
@@ -932,15 +1058,16 @@ public:
     return domain_intersect(ret, range(statement_domain));
   }
 
-  AccessRelations buildAccessRelations(const LoopInstanceVars &loop_analysis,
+  AccessRelations buildAccessRelations(islpp::union_map statement_domain,
+                                       const LoopInstanceVars &loop_analysis,
                                        BBAnalysis &bb_analysis) {
     islpp::union_map writes{"{}"};
     islpp::union_map reads{"{}"};
 
     for (auto &[visit, domain] : bb_analysis) {
 
-      // now we generate our access relations, visiting all loads and
-      // stores, separated by sync block
+      // now we generate our access relations, visiting all loads
+      // and stores, separated by sync block
       auto loop = loop_info.getLoopFor(visit);
       auto &loop_domain = loop_analysis.find(loop)->getSecond();
 
@@ -950,9 +1077,8 @@ public:
           auto ptr_operand =
               const_cast<llvm::Value *>(mem_access->getPointerOperand());
 
-          if (auto qa = getQuasiaffineForm(*ptr_operand, loop, loop_domain)) {
-            auto as_map =
-                name(islpp::map{qa->expr}, islpp::dim::in, statement.getName());
+          if (auto qa = getQuasiaffineLoad(*ptr_operand, loop, loop_domain)) {
+            auto as_map = name(*qa, islpp::dim::in, statement.getName());
             switch (mem_access->getAccessType()) {
             case MemoryAccessStatement::Access::Read:
               reads = reads + islpp::union_map{as_map};
@@ -967,6 +1093,8 @@ public:
         }
       }
     }
+
+    llvm::dbgs() << lexmax(apply(range(statement_domain), writes)) << "\n";
 
     return {
         .reads = std::move(reads),
@@ -1012,7 +1140,8 @@ public:
         // the statement invocations in this domain
         const auto stmt_domain = apply(stmt_set, statement_domain);
 
-        // threads to statement invocation, limited to this statement
+        // threads to statement invocation, limited to this
+        // statement
         const auto tid_to_stmt = range_intersect(tid_to_stmt_inst, stmt_domain);
 
         // if we are a barrier...
@@ -1035,8 +1164,8 @@ public:
           const auto thread_pairs = universal(active_threads, active_threads) -
                                     identity(active_threads);
 
-          // verify that all threads that reach this barrier CAN reach
-          // this barrier
+          // verify that all threads that reach this barrier CAN
+          // reach this barrier
           auto barrier_statements = std::visit(
               [&](const auto &bar) -> islpp::union_map {
                 using T = std::decay_t<decltype(bar)>;
@@ -1051,8 +1180,8 @@ public:
                   // if it is a block-level barrier
                   const BarrierStatement::Block &block_bar = bar;
 
-                  // every thread in the block must pass through this
-                  // barrier, no exceptions
+                  // every thread in the block must pass through
+                  // this barrier, no exceptions
 
                   // thus, ensure that the stmt distribution domain
                   // encapsulates all threads in the block
@@ -1080,8 +1209,8 @@ public:
                 if constexpr (std::is_same_v<BarrierStatement::Warp, T>) {
                   // if it is a warp-level barrier
                   const BarrierStatement::Warp &warp_bar = bar;
-                  // ensure that the threads that the warp is waiting for
-                  // can arrive at the warp
+                  // ensure that the threads that the warp is
+                  // waiting for can arrive at the warp
 
                   // take note:
                   // (wid1 -> lid1) -> (wid2 -> lid2)
@@ -1092,7 +1221,8 @@ public:
                   const auto active_warps =
                       apply(active_threads, thread_to_warp_lane);
 
-                  // so now we can determine threads which are in the same warp
+                  // so now we can determine threads which are in
+                  // the same warp
 
                   // retain a thread pair only if:
                   //  1. threads share the same warp
@@ -1106,8 +1236,8 @@ public:
                       same_cta;
 
                   //  2. the mask accepts both lanes
-                  // note that mask is instanced on statements, not enough to go
-                  // by mask only
+                  // note that mask is instanced on statements, not
+                  // enough to go by mask only
 
                   // get all threads involved with this statement
                   const auto stmt_distribution =

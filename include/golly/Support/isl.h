@@ -132,6 +132,12 @@ struct space_config {
   OPEN_UNOP(SET, MAP, domain, isl_##MAP##_domain);                             \
   OPEN_UNOP(SET, MAP, range, isl_##MAP##_range);
 
+#define NAME_DIM_OPERATION(TYPE)                                               \
+  inline TYPE name(TYPE bs, dim on, string_view name) {                        \
+    return TYPE{isl_##TYPE##_set_tuple_name(                                   \
+        bs.yield(), static_cast<isl_dim_type>(on), name.data())};              \
+  }
+
 #define NAME_OPERATORS(MAP, SET)                                               \
   inline string name(SET bs) {                                                 \
     auto str = isl_##SET##_get_tuple_name(bs.get());                           \
@@ -587,6 +593,8 @@ OPEN_UNOP(set, pw_aff, domain, isl_pw_aff_domain)
 // EXPRESSION(union_pw_aff);
 // EXPRESSION(union_pw_multi_aff);
 // EXPRESSION(multi_union_pw_aff);
+
+NAME_DIM_OPERATION(multi_aff)
 
 COMPARABLE_EXPR(aff);
 COMPARABLE_EXPR(pw_aff);
