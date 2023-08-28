@@ -4,3 +4,6 @@
 [submodule "deps/compile-time-regular-expressions"]
 	path = deps/compile-time-regular-expressions
 	url = https://github.com/hanickadot/compile-time-regular-expressions.git
+[submodule "tests/gpuverify"]
+	path = tests/gpuverify
+	url = https://github.com/mc-imperial/gpuverify
