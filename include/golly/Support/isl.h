@@ -742,6 +742,11 @@ inline space add_param(space sp, string_view param) {
   return space{tmp};
 }
 
+inline space drop_dims(space sp, dim d, int first, int n) {
+  return islpp::space{
+      isl_space_drop_dims(sp.yield(), static_cast<isl_dim_type>(d), first, n)};
+}
+
 // increments last val
 inline multi_aff increment(multi_aff ma) {
   auto ret = ma;

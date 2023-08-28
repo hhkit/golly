@@ -137,7 +137,7 @@ CudaParameters CudaParameters::Builder::build() {
   }
 
   wip.finalized = true;
-  return wip;
+  return std::move(wip);
 }
 
 void CudaParameters::dump(llvm::raw_ostream &os) const {

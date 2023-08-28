@@ -18,9 +18,12 @@
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/Support/Debug.h>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#define DEBUG_TYPE "golly"
 
 namespace golly {
 using llvm::DenseMap;
@@ -38,22 +41,12 @@ using std::vector;
 
 using InductionVarSet = llvm::MapVector<const llvm::Value *, string>;
 
-struct dim3 {
-  int x, y, z;
-};
-
-struct OracleData {
-  dim3 ntid{16, 16, 1}; // size of threadblock
-  dim3 ncta{1, 1, 1};   // size of grid
-  int warpSize = 32;    // size of warp
-};
-
 // calculate based on launch parameters
 struct FunctionInvariants {
 
   islpp::set distribution_domain; // [cta, tid], the domain of active threads
-  islpp::multi_aff getCtaId;      // [cta, tid] -> [cta]
-  islpp::multi_aff getThreadId;   // [cta, tid] -> [tid]
+  islpp::map getCtaId;            // [cta, tid] -> [cta]
+  islpp::map getThreadId;         // [cta, tid] -> [tid]
   islpp::map getWarpLaneTuple;    // [tid] -> [wid, lid]
   islpp::map warpTupleToWarp;     // [wid -> lid] -> [wid]
   islpp::map warpTupleToLane;     // [wid -> lid] -> [lid]
@@ -113,8 +106,6 @@ public:
              thread_params->getDimCounts().size();
 
     if (auto intrin = thread_params->getIntrinsic(val)) {
-      llvm::dbgs() << *thread_params << "\n"
-                   << thread_params->getAlias(intrin->dim) << "\n";
       if (intrin->type == IntrinsicType::id)
         return thread_params->getDimensionIndex(intrin->dim);
     }
@@ -268,10 +259,10 @@ public:
     return mergeNary(S, [](auto lhs, auto rhs) { return max(lhs, rhs); });
   }
   QuaffExpr visitSMinExpr(const llvm::SCEVSMinExpr *S) {
-    return mergeNary(S, [](auto lhs, auto rhs) { return max(lhs, rhs); });
+    return mergeNary(S, [](auto lhs, auto rhs) { return min(lhs, rhs); });
   }
   QuaffExpr visitUMinExpr(const llvm::SCEVUMinExpr *S) {
-    return mergeNary(S, [](auto lhs, auto rhs) { return max(lhs, rhs); });
+    return mergeNary(S, [](auto lhs, auto rhs) { return min(lhs, rhs); });
   }
 
   QuaffExpr visitUDivExpr(const llvm::SCEVUDivExpr *S) {
@@ -524,21 +515,38 @@ public:
     return ret ? ret : Optional<QuaffExpr>{};
   }
 
+#undef LLVM_DEBUG
+#define LLVM_DEBUG(x) (x)
+
   Pscop build(Function &f) {
     using namespace islpp;
     // stmt_info.dump(llvm::dbgs());
+    LLVM_DEBUG(llvm::dbgs() << "Function-level analysis\n");
     auto fn_analysis = detectFunctionInvariants(f, dimension_detection);
+
+    LLVM_DEBUG(llvm::dbgs() << "Loop analysis\n");
     auto loop_analysis = affinateRegions(f, fn_analysis, dimension_detection);
+
+    LLVM_DEBUG(llvm::dbgs() << "Branch analysis\n");
     auto bb_analysis = affinateConstraints(f, loop_analysis);
+
+    LLVM_DEBUG(llvm::dbgs() << "Domain construction\n");
     auto statement_domain = buildDomain(f, bb_analysis);
+
+    LLVM_DEBUG(llvm::dbgs() << "Distribution schedule construction\n");
     auto distribution_schedule = buildDistributionSchedule(
         statement_domain, fn_analysis, loop_analysis, bb_analysis);
 
+    LLVM_DEBUG(llvm::dbgs() << "Temporal schedule construction\n");
     auto temporal_schedule = buildSchedule(f, fn_analysis, statement_domain,
                                            loop_analysis, bb_analysis);
+
+    LLVM_DEBUG(llvm::dbgs() << "Sync schedule construction\n");
     auto sync_schedule = buildSynchronizationSchedule(
         f, fn_analysis, statement_domain, distribution_schedule,
         temporal_schedule, bb_analysis);
+
+    LLVM_DEBUG(llvm::dbgs() << "Access relation construction\n");
     auto access_relations = buildAccessRelations(loop_analysis, bb_analysis);
 
     return Pscop{
@@ -590,14 +598,31 @@ public:
       return flat_range_product(affs);
     })();
 
-    auto warpid_getter = islpp::map{fmt::format(
-        "{{ [{0}] -> [ floor( {0} / {1} ) ] }} ", "tidx", dd.warpSize)};
-    auto lane_id_getter = islpp::map{
-        fmt::format("{{ [{0}] -> [{0} mod {1}] }} ", "tidx", dd.warpSize)};
+    auto flat_index_getter = ([&]() -> islpp::map {
+      auto domain_space =
+          drop_dims(get_space(domain), islpp::dim::set, 0, dd.getGridDims());
+      int index = 0;
+      int dim_size = 1;
 
-    auto warp_tuple_getter = islpp::map{
-        fmt::format("{{ [{0}] -> [ [floor( {0} / {1} )] -> [{0} mod {1}] ] }} ",
-                    "tidx", dd.warpSize)};
+      islpp::aff res = domain_space.zero<islpp::aff>();
+
+      for (auto [dim, count] : dd.getDimCounts()) {
+        if (dim >= Dimension::threadX) {
+          res = res +
+                domain_space.coeff<islpp::aff>(islpp::dim::in, index, dim_size);
+          dim_size *= count;
+          index++;
+        }
+      }
+
+      return islpp::map{res};
+    })();
+
+    auto warp_tuple_getter = apply_range(
+        flat_index_getter,
+        islpp::map{fmt::format(
+            "{{ [{0}] -> [ [floor( {0} / {1} )] -> [{0} mod {1}] ] }} ", "tidx",
+            dd.warpSize)});
 
     auto wl_to_warp = islpp::map{
         fmt::format("{{ [[{0}] -> [{1}]] -> [ {0} ] }} ", "wid", "lid")};
@@ -606,8 +631,8 @@ public:
         fmt::format("{{ [[{0}] -> [{1}]] -> [ {1} ] }} ", "wid", "lid")};
 
     return FunctionInvariants{.distribution_domain = domain,
-                              .getCtaId = block_getter,
-                              .getThreadId = thread_getter,
+                              .getCtaId = islpp::map{block_getter},
+                              .getThreadId = islpp::map{thread_getter},
                               .getWarpLaneTuple = warp_tuple_getter,
                               .warpTupleToWarp = wl_to_warp,
                               .warpTupleToLane = wl_to_lane};
@@ -664,6 +689,7 @@ public:
 
             // we generate an identity function for the newly added variable
             auto domain_space = islpp::get_space(invariants.getDomain());
+
             auto ident = islpp::pw_aff{domain_space.coeff<islpp::aff>(
                 islpp::dim::in, *invariants.getIVarIndex(loopVar), 1)};
 
@@ -974,7 +1000,6 @@ public:
 
     // [wid -> lid] -> [cta,tid]
     const auto warp_lane_to_thread = reverse(thread_to_warp_lane);
-
     for (auto &[visit, _domain] : bb_analysis) {
       auto loop = loop_info.getLoopFor(visit);
 
@@ -997,7 +1022,10 @@ public:
           const auto active_threads = apply(stmt_domain, distribution_schedule);
 
           if (is_empty(active_threads)) {
-            llvm::outs() << "warning: unreachable barrier\n";
+            llvm::outs()
+                << "warning: unreachable barrier\n"
+                << *barrier->getDefiningInstruction().getDebugLoc().get()
+                << "\n";
             continue;
           }
 
