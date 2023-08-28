@@ -15,6 +15,7 @@
 #include <llvm/Analysis/RegionInfo.h>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/Instructions.h>
@@ -638,40 +639,41 @@ public:
                : Optional<islpp::map>{};
   }
 
-#undef LLVM_DEBUG
-#define LLVM_DEBUG(x) (x)
-
   Pscop build(Function &f) {
     using namespace islpp;
     // stmt_info.dump(llvm::dbgs());
-    LLVM_DEBUG(llvm::dbgs() << "Function-level analysis\n");
+    LLVM_DEBUG(llvm::dbgs()
+               << "Analyzing " << llvm::demangle(f.getName().str()) << "\n");
+
+    LLVM_DEBUG(llvm::dbgs() << "    Function-level analysis\n");
     auto fn_analysis = detectFunctionInvariants(f, dimension_detection);
 
-    LLVM_DEBUG(llvm::dbgs() << "Loop analysis\n");
+    LLVM_DEBUG(llvm::dbgs() << "    Loop analysis\n");
     auto loop_analysis = affinateRegions(f, fn_analysis, dimension_detection);
 
-    LLVM_DEBUG(llvm::dbgs() << "Branch analysis\n");
+    LLVM_DEBUG(llvm::dbgs() << "    Branch analysis\n");
     auto bb_analysis = affinateConstraints(f, loop_analysis);
 
-    LLVM_DEBUG(llvm::dbgs() << "Domain construction\n");
+    LLVM_DEBUG(llvm::dbgs() << "    Domain construction\n");
     auto statement_domain = buildDomain(f, bb_analysis);
 
-    LLVM_DEBUG(llvm::dbgs() << "Distribution schedule construction\n");
+    LLVM_DEBUG(llvm::dbgs() << "    Distribution schedule construction\n");
     auto distribution_schedule = buildDistributionSchedule(
         statement_domain, fn_analysis, loop_analysis, bb_analysis);
 
-    LLVM_DEBUG(llvm::dbgs() << "Temporal schedule construction\n");
+    LLVM_DEBUG(llvm::dbgs() << "    Temporal schedule construction\n");
     auto temporal_schedule = buildSchedule(f, fn_analysis, statement_domain,
                                            loop_analysis, bb_analysis);
 
-    LLVM_DEBUG(llvm::dbgs() << "Sync schedule construction\n");
+    LLVM_DEBUG(llvm::dbgs() << "    Sync schedule construction\n");
     auto sync_schedule = buildSynchronizationSchedule(
         f, fn_analysis, statement_domain, distribution_schedule,
         temporal_schedule, bb_analysis);
 
-    LLVM_DEBUG(llvm::dbgs() << "Access relation construction\n");
+    LLVM_DEBUG(llvm::dbgs() << "    Access relation construction\n");
     auto access_relations =
         buildAccessRelations(statement_domain, loop_analysis, bb_analysis);
+    LLVM_DEBUG(llvm::dbgs() << "------------------------------------\n");
 
     return Pscop{
         .instantiation_domain = coalesce(statement_domain),
@@ -915,7 +917,7 @@ public:
 
         if (constraint)
           cmp_constraints.try_emplace(icmp, *constraint);
-        llvm::dbgs() << *icmp << " " << constraint << "\n";
+        // llvm::dbgs() << *icmp << " " << constraint << "\n";
       } else
         llvm::dbgs() << "not affine\n";
     }
@@ -1093,8 +1095,6 @@ public:
         }
       }
     }
-
-    llvm::dbgs() << lexmax(apply(range(statement_domain), writes)) << "\n";
 
     return {
         .reads = std::move(reads),
@@ -1317,7 +1317,8 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
   }
 
   auto ret = builder.build(f);
-  llvm::dbgs() << "pscop for " << f.getName() << ": {\n" << ret << "}\n";
+  LLVM_DEBUG(llvm::dbgs() << "pscop for " << f.getName() << ": {\n"
+                          << ret << "}\n");
   return ret;
 }
 

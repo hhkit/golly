@@ -4,6 +4,7 @@
 #include <golly/Analysis/RaceDetection.h>
 #include <golly/Analysis/StatementDetection.h>
 #include <golly/Support/isl_llvm.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/DebugInfo.h>
 
 namespace golly {
@@ -138,17 +139,19 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
                              dbg.getLine(), dbg.getColumn());
         };
 
-        llvm::errs() << "Race detected between: \n  "
-                     << caret_loc(write_dbg_loc) << " on thread "
-                     << sample(domain(single_pair)) << " and \n  "
-                     << caret_loc(acc_dbg_loc) << " on thread "
+        llvm::errs() << "Race detected in " << llvm::demangle(f.getName().str())
+                     << " between: \n  " << caret_loc(write_dbg_loc)
+                     << " on thread " << sample(domain(single_pair))
+                     << " and \n  " << caret_loc(acc_dbg_loc) << " on thread "
                      << sample(range(single_pair)) << "\n";
 
         llvm::errs() << sampl << "\n";
       }
     });
+  } else {
+    llvm::outs() << "No race detected in " << llvm::demangle(f.getName().str())
+                 << "\n";
   }
-
   return {};
 }
 } // namespace golly
