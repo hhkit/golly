@@ -1,0 +1,6 @@
+[submodule "tests/polybenchGpu"]
+	path = tests/polybenchGpu
+	url = https://github.com/sgrauerg/polybenchGpu
+[submodule "deps/compile-time-regular-expressions"]
+	path = deps/compile-time-regular-expressions
+	url = https://github.com/hanickadot/compile-time-regular-expressions.git
