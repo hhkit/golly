@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <fmt/format.h>
+#include <golly/Analysis/CudaParameterDetection.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/RaceDetection.h>
 #include <golly/Analysis/StatementDetection.h>
@@ -11,6 +12,9 @@ namespace golly {
 AnalysisKey RaceDetector::Key;
 
 Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
+  const auto &params = fam.getResult<golly::CudaParameterDetection>(f);
+  llvm::outs() << "Running race detection with launch parameters: " << params
+               << "\n";
   const auto &pscop = fam.getResult<golly::PscopBuilderPass>(f);
 
   auto tid_to_stmt_inst = reverse(pscop.distribution_schedule);

@@ -8,7 +8,7 @@ import tempfile
 golly_path = "./build/lib/golly.so"
 
 
-def compile(filename: path.Path, workdir: path.Path):
+def compile(filename: path.Path, workdir: path.Path, showWarnings: bool):
     workdir.mkdir(parents=True, exist_ok=True)
     sp.run(
         [
@@ -21,7 +21,8 @@ def compile(filename: path.Path, workdir: path.Path):
             "-Xclang",
             "-disable-O0-optnone",
             filename.resolve(),
-        ],
+        ]
+        + ["" if showWarnings else "-w"],
         cwd=workdir.resolve(),
     )
 
@@ -66,19 +67,27 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument("filename")
 parser.add_argument(
-    "--blockDim", help="Block dimensions, specify as [x,y,z] | [x,y] | x"
+    "--blockDim", "-B", help="Block dimensions, specify as [x,y,z] | [x,y] | x"
 )
-parser.add_argument("--gridDim", help="Grid dimensions, specify [x,y,z] | [x,y] | x")
+parser.add_argument(
+    "--gridDim", "-G", help="Grid dimensions, specify [x,y,z] | [x,y] | x"
+)
+parser.add_argument(
+    "--showWarnings",
+    "-W",
+    help="Shows warnings from clang (suppressed otherwise)",
+    action="store_true",
+)
 
 args = parser.parse_args()
 
-workdir = path.Path(f"/{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
+workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
 cu_file = path.Path(args.filename)
 ll_file = cu_file.with_suffix(".ll")
 
 assert cu_file.exists()
 
-compile(cu_file, workdir)
+compile(cu_file, workdir, args.showWarnings)
 with open(ll_file, "w") as out_ll:
     canonicalize(out_ll, workdir)
 analyze(ll_file, blockDim=args.blockDim, gridDim=args.gridDim)

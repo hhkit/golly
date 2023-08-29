@@ -377,6 +377,13 @@ public:
       return QuaffExpr{QuaffClass::IVar, islpp::pw_aff{expr}};
     }
 
+    if (auto addr_space_cast =
+            llvm::dyn_cast_or_null<llvm::AddrSpaceCastInst>(value)) {
+      auto operand = addr_space_cast->getOperand(0);
+      auto scev = se.getSCEV(operand);
+      return visit(scev);
+    }
+
     if (ivdb.isPointerArgument(value)) {
       auto ptr_name = value->getName();
       auto expr = space.zero<islpp::aff>();
@@ -779,6 +786,11 @@ public:
               top_level_region_invar.addPointerArgument(&arg); // todo: globals
             else
               top_level_region_invar.addInvariantLoad(&arg);
+          }
+
+          for (auto &arg : f.getParent()->getGlobalList()) {
+            // llvm::dbgs() << "global: " << arg.getName() << "\n";
+            top_level_region_invar.addPointerArgument(&arg);
           }
           return top_level_region_invar;
         })());

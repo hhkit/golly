@@ -7,6 +7,8 @@
 #include <llvm/Support/CommandLine.h>
 #include <variant>
 
+#define DEBUG_TYPE "golly-verbose"
+
 namespace golly {
 
 using llvm::StringMap;
@@ -238,18 +240,32 @@ CudaParameters CudaParameters::Builder::build() {
 }
 
 void CudaParameters::dump(llvm::raw_ostream &os) const {
-  for (auto [instr, intrin] : detections) {
-    os << *instr << " -> " << getAlias(intrin.dim) << "\n";
-  }
+  std::vector<int> grid_dims;
+  std::vector<int> block_dims;
+  for (auto [dim, count] : dim_count)
+    if (is_grid_dim(dim))
+      grid_dims.emplace_back(count);
 
-  for (auto [dim, count] : dim_count) {
-    os << getAlias(dim) << " -> " << count << "\n";
-  }
+  for (auto [dim, count] : dim_count)
+    if (!is_grid_dim(dim))
+      block_dims.emplace_back(count);
 
-  if (finalized) {
-    for (auto [intrin, index] : cached_dim_index)
-      os << fmt::format("[{0}] : {1}", index, getAlias(intrin)) << "\n";
-  }
+  os << fmt::format("gridDims: [{}], blockDims: [{}]",
+                    fmt::join(grid_dims, ","), fmt::join(block_dims, ","));
+
+  LLVM_DEBUG(
+      for (auto [instr, intrin]
+           : detections) {
+        os << *instr << " -> " << getAlias(intrin.dim) << "\n";
+      }
+
+      for (auto [dim, count]
+           : dim_count) { os << getAlias(dim) << " -> " << count << "\n"; }
+
+      if (finalized) {
+        for (auto [intrin, index] : cached_dim_index)
+          os << fmt::format("[{0}] : {1}", index, getAlias(intrin)) << "\n";
+      });
 }
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const CudaParameters &di) {
