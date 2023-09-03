@@ -28,6 +28,8 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
 
   // this is Chatarasi's MHP relation, adapted to accommodate thread pairs
 
+  auto &sync_times = pscop.sync_schedule;
+
   // enumerate all thread pairs
   auto threads = range(pscop.distribution_schedule);
   auto thread_pairs = universal(threads, threads) - identity(threads);
@@ -37,36 +39,6 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
                                tid_to_stmt_inst) + // [ S -> T ] -> StmtInsts(S)
                    apply_range(range_map(thread_pairs),
                                tid_to_stmt_inst); // [ S -> T ] -> StmtInsts(T)
-
-  // [[S -> T] -> StmtInst] -> Time
-  auto dmn_timings = apply_range(range_map(dmn_insts), pscop.temporal_schedule);
-
-  // [[S -> T] -> StmtInst] -> Time
-  auto sync_timings =
-      apply_range(range_map(pscop.sync_schedule), pscop.temporal_schedule);
-
-  // [[S->T] -> StmtInst] -> [[S->T] -> SyncInst]
-  auto barrs_over_stmts = ([&]() {
-    //  [[S -> T] -> StmtInst] -> [[S -> T] -> SyncInst]
-    // but we have mismatched S->T
-    auto bars_lex_stmts = dmn_timings <<= sync_timings;
-
-    // first, we zip to obtain: [[S->T] -> [S->T]] -> [StmtInst -> SyncInst]
-    auto zipped = zip(bars_lex_stmts);
-
-    // then we filter to [[S->T] == [S->T]] -> [StmtInst -> SyncInst]
-    auto filtered =
-        domain_intersect(zipped, wrap(identity(wrap(thread_pairs))));
-    // then we unzip to retrieve the original
-    // [[S->T] -> StmtInst] -> [[S->T] -> SyncInst]
-    return zip(filtered);
-  })();
-
-  // todo: confirm this step does not lose information
-  // ok, this step DOES lose information
-  // [[S->T] -> StmtInst] -> SyncTime
-  auto sync_times = lexmin(apply_range(range_factor_range(barrs_over_stmts),
-                                       pscop.temporal_schedule));
 
   auto same_range = wrap(identity(range(pscop.temporal_schedule)));
 

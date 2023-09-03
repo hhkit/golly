@@ -847,6 +847,7 @@ public:
           }
         } else {
           llvm::dbgs() << "could not deduce loop bounds of " << *loop << " \n";
+          loop->dumpVerbose();
         }
         loop_to_instances.try_emplace(loop, invariants);
       }
@@ -1126,7 +1127,7 @@ public:
       Function &f, const FunctionInvariants &fn_analysis,
       islpp::union_map statement_domain, islpp::union_map distribution_schedule,
       islpp::union_map temporal_schedule, BBAnalysis &bb_analysis) {
-    islpp::union_map ret{"{}"};
+    islpp::union_map barrs{"{}"};
 
     const auto launched_threads =
         islpp::union_set{fn_analysis.distribution_domain};
@@ -1295,12 +1296,52 @@ public:
               },
               barrier->getBarrier());
 
-          ret = ret + barrier_statements;
+          barrs = barrs + barrier_statements;
         }
       }
     }
 
-    return ret;
+    // enumerate all thread pairs
+    auto threads = range(distribution_schedule);
+    auto thread_pairs = universal(threads, threads) - identity(threads);
+
+    // [S -> T] -> StmtInsts of S and T
+    auto dmn_insts =
+        apply_range(domain_map(thread_pairs),
+                    tid_to_stmt_inst) + // [ S -> T ] -> StmtInsts(S)
+        apply_range(range_map(thread_pairs),
+                    tid_to_stmt_inst); // [ S -> T ] -> StmtInsts(T)
+
+    // [[S -> T] -> StmtInst] -> Time
+    auto dmn_timings = apply_range(range_map(dmn_insts), temporal_schedule);
+
+    // [[S -> T] -> StmtInst] -> Time
+    auto sync_timings = apply_range(range_map(barrs), temporal_schedule);
+
+    // [[S->T] -> StmtInst] -> [[S->T] -> SyncInst]
+    auto barrs_over_stmts = ([&]() {
+      //  [[S -> T] -> StmtInst] -> [[S -> T] -> SyncInst]
+      // but we have mismatched S->T
+      auto bars_lex_stmts = dmn_timings <<= sync_timings;
+
+      // first, we zip to obtain: [[S->T] -> [S->T]] -> [StmtInst -> SyncInst]
+      auto zipped = zip(bars_lex_stmts);
+
+      // then we filter to [[S->T] == [S->T]] -> [StmtInst -> SyncInst]
+      auto filtered =
+          domain_intersect(zipped, wrap(identity(wrap(thread_pairs))));
+      // then we unzip to retrieve the original
+      // [[S->T] -> StmtInst] -> [[S->T] -> SyncInst]
+      return zip(filtered);
+    })();
+
+    // todo: confirm this step does not lose information
+    // ok, this step DOES lose information
+    // [[S->T] -> StmtInst] -> SyncTime
+    auto sync_times = lexmin(
+        apply_range(range_factor_range(barrs_over_stmts), temporal_schedule));
+
+    return sync_times;
   }
 
 private:
