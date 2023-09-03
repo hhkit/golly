@@ -1,29 +1,24 @@
 #ifndef GOLLY_SUPPORT_TRAVERSAL_H
 #define GOLLY_SUPPORT_TRAVERSAL_H
 #include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/SCCIterator.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/CFG.h>
-#include <queue>
+#include <ranges>
+#include <vector>
 
 namespace golly {
-template <typename T> void bfs(llvm::BasicBlock *first, T &&fn) {
-  std::queue<llvm::BasicBlock *> queue;
-  llvm::DenseSet<llvm::BasicBlock *> visited;
-  queue.push(first);
-  visited.insert(first);
+template <typename T> void bfs(llvm::Function &f, T &&fn) {
 
-  while (!queue.empty()) {
-    auto visit = queue.front();
-    queue.pop();
+  std::vector<llvm::BasicBlock *> visitus;
+  for (auto b = llvm::scc_begin(&f); b != llvm::scc_end(&f); ++b) {
+    auto &i = *b;
+    for (auto &bb : i)
+      visitus.emplace_back(bb);
+  }
 
-    fn(visit);
-
-    for (auto &&child : llvm::successors(visit)) {
-      if (!visited.contains(child)) {
-        queue.push(child);
-        visited.insert(child);
-      }
-    }
+  for (auto itr = visitus.rbegin(); itr != visitus.rend(); ++itr) {
+    fn(*itr);
   }
 }
 } // namespace golly

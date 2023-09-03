@@ -615,10 +615,10 @@ class PscopBuilder {
   using BBAnalysis = DenseMap<const llvm::BasicBlock *, BBInvariants>;
 
 public:
-  PscopBuilder(RegionInfo &ri, LoopInfo &li, ScalarEvolution &se,
+  PscopBuilder(Function &f, RegionInfo &ri, LoopInfo &li, ScalarEvolution &se,
                DominatorTree &dom_tree, PostDominatorTree &pdt,
                StatementDetection &sbd, CudaParameters &dd)
-      : region_info{ri}, loop_info{li}, scalar_evo{se}, stmt_info{sbd},
+      : f{f}, region_info{ri}, loop_info{li}, scalar_evo{se}, stmt_info{sbd},
         dom_tree{dom_tree}, post_dom{pdt}, dimension_detection{dd} {}
 
   // take in value by non-const because the SCEV guy doesn't know
@@ -795,7 +795,7 @@ public:
           return top_level_region_invar;
         })());
 
-    bfs(&f.getEntryBlock(), [&](llvm::BasicBlock *visit) {
+    bfs(f, [&](llvm::BasicBlock *visit) {
       auto loop = loop_info.getLoopFor(visit);
 
       // if new loop
@@ -845,8 +845,9 @@ public:
             // ------------------------------------
             // goal: [tid,i] : 0 <= tid <= 255 and 0 <= i < 5
           }
+        } else {
+          llvm::dbgs() << "could not deduce loop bounds of " << *loop << " \n";
         }
-
         loop_to_instances.try_emplace(loop, invariants);
       }
     });
@@ -1039,7 +1040,7 @@ public:
 
     int max_dim = 0;
 
-    bfs(&f.getEntryBlock(), [&](llvm::BasicBlock *visit) {
+    bfs(f, [&](llvm::BasicBlock *visit) {
       auto loop = loop_info.getLoopFor(visit);
       if (auto itr = loop_setup.find(loop); itr == loop_setup.end()) {
         // setup the new loop
@@ -1303,6 +1304,7 @@ public:
   }
 
 private:
+  Function &f;
   CudaParameters &dimension_detection;
   RegionInfo &region_info;
   LoopInfo &loop_info;
@@ -1316,7 +1318,8 @@ AnalysisKey PscopBuilderPass::Key;
 
 PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
                                                FunctionAnalysisManager &fam) {
-  PscopBuilder builder{fam.getResult<llvm::RegionInfoAnalysis>(f),
+  PscopBuilder builder{f,
+                       fam.getResult<llvm::RegionInfoAnalysis>(f),
                        fam.getResult<llvm::LoopAnalysis>(f),
                        fam.getResult<llvm::ScalarEvolutionAnalysis>(f),
                        fam.getResult<llvm::DominatorTreeAnalysis>(f),
