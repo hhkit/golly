@@ -404,6 +404,9 @@ inline point sample(basic_set s) {
 inline basic_map sample(union_map s) {
   return basic_map{isl_union_map_sample(s.yield())};
 }
+inline set drop_unused_params(set s) {
+  return set{isl_set_drop_unused_params(s.get())};
+}
 inline basic_map clean(basic_map s) {
   auto dims = isl_basic_map_dim(s.get(), isl_dim_type::isl_dim_param);
   return basic_map{isl_basic_map_remove_dims(

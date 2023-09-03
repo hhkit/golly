@@ -8,14 +8,21 @@
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/DebugInfo.h>
 
+llvm::cl::opt<bool> golly_verbose("golly-verbose",
+                                  llvm::cl::desc("verbose output"));
+
 namespace golly {
 AnalysisKey RaceDetector::Key;
 
 Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   const auto &params = fam.getResult<golly::CudaParameterDetection>(f);
-  llvm::outs() << "Running race detection with launch parameters: " << params
-               << "\n";
+  llvm::outs() << "Running race detection of "
+               << llvm::demangle(f.getName().str())
+               << " with launch parameters: " << params << "\n";
+
   const auto &pscop = fam.getResult<golly::PscopBuilderPass>(f);
+  if (golly_verbose)
+    llvm::dbgs() << pscop << "\n";
 
   auto tid_to_stmt_inst = reverse(pscop.distribution_schedule);
 
@@ -56,6 +63,7 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   })();
 
   // todo: confirm this step does not lose information
+  // ok, this step DOES lose information
   // [[S->T] -> StmtInst] -> SyncTime
   auto sync_times = lexmin(apply_range(range_factor_range(barrs_over_stmts),
                                        pscop.temporal_schedule));

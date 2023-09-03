@@ -1037,6 +1037,8 @@ public:
       loop_setup.try_emplace(nullptr, LoopStatus{maff});
     }
 
+    int max_dim = 0;
+
     bfs(&f.getEntryBlock(), [&](llvm::BasicBlock *visit) {
       auto loop = loop_info.getLoopFor(visit);
       if (auto itr = loop_setup.find(loop); itr == loop_setup.end()) {
@@ -1047,9 +1049,10 @@ public:
 
         auto &loop_status = loop_setup.find(parent_loop)->second;
 
-        loop_setup.try_emplace(
+        auto &&[ptr, res] = loop_setup.try_emplace(
             loop, LoopStatus{append_zero(project_up(loop_status))});
         loop_status = increment(loop_status);
+        max_dim = std::max(max_dim, dims(ptr->second, islpp::dim::out));
       }
 
       // now we add ourselves to our domain
@@ -1063,6 +1066,10 @@ public:
         status = increment(status);
       }
     });
+    for (auto &[bb, dom] : analysis) {
+      while (dims(dom, islpp::dim::out) < max_dim)
+        dom = append_zero(dom);
+    }
 
     islpp::union_map ret{"{}"};
     for (auto &[bb, dom] : analysis)

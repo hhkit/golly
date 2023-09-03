@@ -88,6 +88,8 @@ public:
 
 private:
   CudaParameters wip;
+
+  friend class CudaParameterDetection;
 };
 
 struct DimParser : cl::parser<dim3> {
@@ -296,7 +298,22 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   } else {
     // no oracle provided
     // making a guess based on intrinsics used
-    b.addSize(Dimension::threadX, 32).addSize(Dimension::threadY, 8);
+    static int heurestic[][3] = {
+        {},
+        {256, 1, 1},
+        {32, 8, 1},
+        {32, 8, 1},
+    };
+
+    int c = std::ranges::count_if(b.wip.getDimCounts(), [](const auto &e) {
+      return !is_grid_dim(e.first);
+    });
+
+    int i = 0;
+    for (auto &[dim, count] : b.wip.getDimCounts()) {
+      if (!is_grid_dim(dim))
+        b.addSize(dim, heurestic[c][i++]);
+    }
   }
 
   if (gridDims) {
@@ -310,7 +327,22 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   } else {
     // no oracle provided
     // making a guess based on intrinsics used
-    b.addSize(Dimension::ctaX, 1);
+    static int heurestic[][3] = {
+        {},
+        {1024, 1, 1},
+        {32, 32, 1},
+        {16, 16, 16},
+    };
+
+    int c = std::ranges::count_if(b.wip.getDimCounts(), [](const auto &e) {
+      return is_grid_dim(e.first);
+    });
+
+    int i = 0;
+    for (auto &[dim, count] : b.wip.getDimCounts()) {
+      if (is_grid_dim(dim))
+        b.addSize(dim, heurestic[c][i++]);
+    }
   }
 
   return b.build();
