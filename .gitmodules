@@ -7,3 +7,6 @@
 [submodule "tests/gpuverify"]
 	path = tests/gpuverify
 	url = https://github.com/mc-imperial/gpuverify
+[submodule "tests/DRACC"]
+	path = tests/DRACC
+	url = https://github.com/RWTH-HPC/DRACC
