@@ -7,13 +7,13 @@ __global__ void loop(int *val, int N) {
 
   for (int i = 0; i < 5; ++i) {
     for (int j = 0; j < i; ++j)
-      val[j] = 1;
-    val[3] = 2;
+      val[threadIdx.x] = 1;
+    // val[3] = 2;
   }
 
   for (int j = 0; j < 3; ++j)
-    val[j] = 5;
+    val[threadIdx.x] = 5;
 
-  for (int j = 0; j < threadIdx.x; ++j)
-    val[j] = 7;
+  for (int j = threadIdx.x; j < 3 * threadIdx.x + threadIdx.x; ++j)
+    val[threadIdx.x] = 7;
 }

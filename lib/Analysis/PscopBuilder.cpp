@@ -1111,7 +1111,8 @@ public:
               break;
             }
           } else {
-            llvm::dbgs() << "not quasi affine\n";
+            auto ptr = (mem_access->getDefiningInstruction().getDebugLoc());
+            llvm::dbgs() << *ptr << " not quasi affine\n";
           }
         }
       }

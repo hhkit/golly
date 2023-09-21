@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <fmt/format.h>
+#include <fstream>
 #include <golly/Analysis/CudaParameterDetection.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/RaceDetection.h>
@@ -10,6 +11,8 @@
 
 llvm::cl::opt<bool> golly_verbose("golly-verbose",
                                   llvm::cl::desc("verbose output"));
+
+llvm::cl::opt<std::string> out_file("golly-out", llvm::cl::desc("output file"));
 
 namespace golly {
 AnalysisKey RaceDetector::Key;
@@ -89,6 +92,8 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
     auto conflicting_statements =
         unwrap(range(unwrap(domain(conflicting_syncs))));
 
+    auto fstream = std::ofstream(out_file);
+
     for_each(conflicting_statements, [&](const islpp::map &sampl) {
       auto write_name = islpp::name(sampl, islpp::dim::in);
 
@@ -118,7 +123,6 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
             return fs::canonical(fs::path{dbg.getDirectory().str()} /
                                  fs::path{dbg.getFilename().str()});
           };
-
           return fmt::format("{}:{}:{}", canonicalize(dbg).string(),
                              dbg.getLine(), dbg.getColumn());
         };
@@ -130,6 +134,12 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
                      << sample(range(single_pair)) << "\n";
 
         llvm::errs() << sampl << "\n";
+
+        if (fstream) {
+          fstream << caret_loc(write_dbg_loc) << "\n";
+          fstream << caret_loc(acc_dbg_loc) << "\n";
+          fstream.close();
+        }
       }
     });
   } else {

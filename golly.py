@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import pathlib as path
 import subprocess as sp
 import io
@@ -37,7 +38,7 @@ def canonicalize(outfile: io.TextIOWrapper, workdir: path.Path):
     )
     (out,) = (
         sp.Popen(
-            ["opt", "--polly-canonicalize", ll.resolve()],
+            ["opt", "-early-cse", "--polly-canonicalize", ll.resolve()],
             cwd=workdir.resolve(),
             stdout=sp.PIPE,
         ),
@@ -56,6 +57,7 @@ def analyze(file: path.Path, blockDim: str, gridDim: str, verbose: bool):
             f"--load-pass-plugin={golly_path}",
             "--passes=golly",
             "--disable-output",
+            "--golly-out=pairs.out",
             file.resolve(),
         ]
         + (["--golly-block-dims", blockDim] if blockDim is not None else [])
@@ -66,7 +68,7 @@ def analyze(file: path.Path, blockDim: str, gridDim: str, verbose: bool):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="Golly",
+        prog="olly",
         description="Polyhedral CUDA Analyzer",
     )
 

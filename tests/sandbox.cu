@@ -1,12 +1,5 @@
 __global__ void yolo(int *arr) {
-  extern __shared__ int mem[];
-  auto myid = threadIdx.y * blockDim.x + threadIdx.x;
-  for (int i = 0; i < 3; ++i) {
-    if (myid < 16) {
-      mem[myid + 1] = 0;
-    } else {
-      mem[myid] = 0;
-    }
-    __syncthreads();
-  }
+  for (int i = 0; i < 5; ++i)
+    // for (int j = threadIdx.x; j < 3 * threadIdx.x + threadIdx.x; ++j)
+    arr[0] = 7;
 }
