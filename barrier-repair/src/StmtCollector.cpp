@@ -7,7 +7,12 @@
 #include <filesystem>
 #include <fstream>
 
+#include "llvm/Support/CommandLine.h"
+
 static int patch_counter = 0;
+
+llvm::cl::opt<std::string> tmp_dir("golly-tmp", llvm::cl::desc("tmp dir"));
+
 namespace nus::test {
 void StmtCollector::run(const MatchResult &Result) {
   if (!filter) {
@@ -60,9 +65,7 @@ void StmtCollector::run(const MatchResult &Result) {
   for (auto [id, node] : Result.Nodes.getMap()) {
     if (auto stmt = node.get<clang::Stmt>(); stmt && filter(stmt)) {
 
-      node.dump(llvm::outs(), *Result.Context);
       // add barrier in front of statement
-
       clang::tooling::AtomicChanges acs;
       {
         clang::tooling::AtomicChange ac(*Result.SourceManager,
@@ -90,8 +93,11 @@ void StmtCollector::run(const MatchResult &Result) {
       if (auto buf = fm.getBufferForFile(file)) {
         if (auto code = clang::tooling::applyAtomicChanges(
                 file, (*buf)->getBuffer(), acs, {})) {
+          auto path = std::filesystem::path(tmp_dir.getValue()) /
+                      (std::to_string(++patch_counter) + ext);
 
-          std::ofstream file{std::to_string(patch_counter++) + ext};
+          llvm::dbgs() << "writing to: " << path << "\n";
+          std::ofstream file{path};
           file << *code;
         }
       }
@@ -99,9 +105,5 @@ void StmtCollector::run(const MatchResult &Result) {
   }
 }
 
-void StmtCollector::onEndOfTranslationUnit() {
-  // for (auto &stmt : stmts) {
-  //   clang::tooling::AtomicChange ac();
-  // }
-}
+void StmtCollector::onEndOfTranslationUnit() {}
 } // namespace nus::test

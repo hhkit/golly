@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.12) 
-set (TOOL_NAME my-tool)
+set (TOOL_NAME golly-repair)
 project(${TOOL_NAME} LANGUAGES C CXX)
 
 find_package(LLVM REQUIRED)
@@ -16,7 +16,6 @@ add_definitions(${CLANG_DEFINITIONS})
 add_executable(${TOOL_NAME}
     src/main.cpp 
     src/StmtCollector.cpp
-    src/RewritePrinter.cpp
     src/SourceLocation.cpp
     )
 target_link_libraries(${TOOL_NAME} clangBasic clangTooling clangTransformer clangTidyUtils)

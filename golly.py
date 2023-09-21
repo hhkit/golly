@@ -7,6 +7,7 @@ import argparse
 import tempfile
 
 golly_path = "./build/lib/golly.so"
+golly_repair_path = "./build/barrier-repair/golly-repair"
 
 
 def compile(
@@ -48,7 +49,7 @@ def canonicalize(outfile: io.TextIOWrapper, workdir: path.Path):
     asm.wait()
 
 
-def analyze(file: path.Path, blockDim: str, gridDim: str, verbose: bool):
+def analyze(file: path.Path, patchFile: path.Path, blockDim: str, gridDim: str, verbose: bool):
     sp.run(
         [
             "opt",
@@ -57,18 +58,63 @@ def analyze(file: path.Path, blockDim: str, gridDim: str, verbose: bool):
             f"--load-pass-plugin={golly_path}",
             "--passes=golly",
             "--disable-output",
-            "--golly-out=pairs.out",
             file.resolve(),
         ]
         + (["--golly-block-dims", blockDim] if blockDim is not None else [])
         + (["--golly-grid-dims", gridDim] if gridDim is not None else [])
         + (["--golly-verbose"] if verbose else [])
+        + ([f"--golly-out={patchFile}" if patchFile is not None else []])
     )
 
 
+def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, blockDim, gridDim, verbose, **kwargs):
+    file = filename
+    if file.suffix == ".cu":
+        # compile and canonicalize
+        ll_file = file.with_suffix(".ll")
+
+        compile(file, workdir, args.showWarnings, args.clangArgs)
+        with open(ll_file, "w") as out_ll:
+            canonicalize(out_ll, workdir)
+
+        file = ll_file
+
+    assert file.exists()
+
+    analyze(file, patchFile=patchFile, blockDim=blockDim, gridDim=gridDim, verbose=verbose)
+
+def raceDetected(patchFile: path.Path) -> bool:
+    return patchFile.exists() and patchFile.stat().st_size > 2
+
+def repair(file: path.Path, workdir:path.Path, clangArgs, patchFile: path.Path, blockDim: str, gridDim: str):
+    scratch = path.Path(f"{workdir}/{uuid.uuid4()}")
+    tmp_dir = path.Path(f"{workdir}/patches")
+
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    sp.run([
+        golly_repair_path,
+        file,
+        f"--locsFile={patchFile}",
+        f"--golly-tmp={tmp_dir}"
+    ])
+
+    for f in tmp_dir.glob("*"):
+        print(f"attempt repair with {f}")
+        workdir2 = path.Path(f"{workdir}/{hash(f)}")
+        analysisPass(f, workdir=workdir2, patchFile=scratch, showWarnings=False, clangArgs=clangArgs, blockDim=blockDim, gridDim=gridDim, verbose=False)
+        if raceDetected(scratch):
+            print(f"repair failed with {f}")
+            scratch.unlink()
+        else:
+            print(f"repair success with {f}")
+            return
+
+    print('could not repair race')
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="olly",
+        prog="golly",
         description="Polyhedral CUDA Analyzer",
     )
 
@@ -85,25 +131,23 @@ if __name__ == "__main__":
         help="Shows warnings from clang (suppressed otherwise)",
         action="store_true",
     )
+    
+    parser.add_argument(
+        "--repair",
+        "-r",
+        help="Attempt barrier repair",
+        action="store_true",
+    )
     parser.add_argument("clangArgs", help="argument to pass to clang", nargs="*")
     parser.add_argument("--verbose", "-v", action="store_true", default=False)
 
     args = parser.parse_args()
 
     workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
+    workdir.mkdir(parents=True, exist_ok=True)
+    patchFile=f"{workdir}/pairs.out"
 
-    file = args.filename
-    assert file.exists()
+    analysisPass(workdir=workdir, patchFile=patchFile, **vars(args))
 
-    if file.suffix == ".cu":
-        # compile and canonicalize
-        ll_file = file.with_suffix(".ll")
-
-        compile(file, workdir, args.showWarnings, args.clangArgs)
-        with open(ll_file, "w") as out_ll:
-            canonicalize(out_ll, workdir)
-
-        file = ll_file
-
-    assert file.exists()
-    analyze(file, blockDim=args.blockDim, gridDim=args.gridDim, verbose=args.verbose)
+    if args.repair:
+        repair(args.filename, workdir, clangArgs=args.clangArgs, patchFile=patchFile, blockDim=args.blockDim, gridDim=args.gridDim )

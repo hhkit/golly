@@ -1,5 +1,9 @@
 __global__ void yolo(int *arr) {
-  for (int i = 0; i < 5; ++i)
-    // for (int j = threadIdx.x; j < 3 * threadIdx.x + threadIdx.x; ++j)
-    arr[0] = 7;
+  auto idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx == 0) {
+    arr[1] = 5;
+  }
+
+  arr[idx] = threadIdx.x;
 }
