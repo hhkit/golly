@@ -176,7 +176,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Pscop &pscop) {
   os << "domain:\n  " << pscop.instantiation_domain << "\n";
-  os << "distribution_schedule:\n  " << pscop.distribution_schedule << "\n";
+  os << "thread_allocation:\n  " << pscop.distribution_schedule << "\n";
   os << "temporal_schedule:\n  " << pscop.temporal_schedule << "\n";
   os << "sync_schedule:\n  " << pscop.sync_schedule << "\n";
   os << "writes:\n  " << pscop.write_access_relation << "\n";
