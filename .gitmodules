@@ -10,3 +10,24 @@
 [submodule "tests/DRACC"]
 	path = tests/DRACC
 	url = https://github.com/RWTH-HPC/DRACC
+[submodule "tests/kaldi"]
+	path = tests/simulee/kaldi
+	url = https://github.com/kaldi-asr/kaldi
+[submodule "tests/arrayfire"]
+	path = tests/simulee/arrayfire
+	url = https://github.com/arrayfire/arrayfire
+[submodule "tests/simulee/thundersvm"]
+	path = tests/simulee/thundersvm
+	url = https://github.com/Xtra-Computing/thundersvm
+[submodule "tests/simulee/CUDA-CNN"]
+	path = tests/simulee/CUDA-CNN
+	url = https://github.com/zhxfl/CUDA-CNN
+[submodule "tests/simulee/cudpp"]
+	path = tests/simulee/cudpp
+	url = https://github.com/cudpp/cudpp
+[submodule "tests/simulee/CudaSift"]
+	path = tests/simulee/CudaSift
+	url = https://github.com/Celebrandil/CudaSift
+[submodule "tests/simulee/gunrock"]
+	path = tests/simulee/gunrock
+	url = https://github.com/gunrock/gunrock
