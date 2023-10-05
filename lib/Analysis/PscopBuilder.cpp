@@ -259,7 +259,9 @@ public:
 
     // lhs must be CInt
     // always valid
-    return QuaffExpr(rhs.type, lhs.expr * rhs.expr, *newName);
+    return QuaffExpr{.type = rhs.type,
+                     .expr = lhs.expr * rhs.expr,
+                     .name = string{*newName}};
   }
 
   QuaffExpr visitPtrToIntExpr(const llvm::SCEVPtrToIntExpr *S) {
@@ -890,7 +892,7 @@ public:
       branching_bbs.try_emplace(s, f);
 
     DenseMap<const llvm::ICmpInst *, islpp::set> cmp_constraints;
-    for (auto [icmp, bb] : cmps) {
+    for (auto &&[icmp, bb] : cmps) {
       auto loop = loop_info.getLoopFor(bb);
       auto &region_inv = loop_analysis.find(loop)->second;
 
@@ -900,8 +902,9 @@ public:
           getQuasiaffineForm(*icmp->getOperand(1), loop, region_inv);
 
       if (lhs && rhs) {
+        auto cmp_instr = icmp;
         const auto constraint = ([&]() -> Optional<islpp::set> {
-          switch (icmp->getPredicate()) {
+          switch (cmp_instr->getPredicate()) {
           case llvm::ICmpInst::ICMP_EQ:
             return eq_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_NE:
@@ -930,7 +933,7 @@ public:
         })();
 
         if (constraint)
-          cmp_constraints.try_emplace(icmp, *constraint);
+          cmp_constraints.try_emplace(cmp_instr, *constraint);
         // llvm::dbgs() << *icmp << " " << constraint << "\n";
       } else
         llvm::dbgs() << "not affine\n";

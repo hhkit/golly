@@ -4,7 +4,10 @@
 #include <llvm/IR/PassManager.h>
 namespace golly {
 
+using llvm::Function;
+using llvm::FunctionAnalysisManager;
 using llvm::PassInfoMixin;
+using llvm::PreservedAnalyses;
 
 class RunGollyPass : public PassInfoMixin<RunGollyPass> {
 public:

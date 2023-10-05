@@ -1,8 +1,10 @@
-#include <golly/Analysis/CudaParameterDetection.h>
-#include <golly/Analysis/PscopBuilder.h>
-#include <golly/Analysis/RaceDetection.h>
-#include <golly/Analysis/StatementDetection.h>
-#include <golly/golly.h>
+#include "golly/golly.h"
+#include "golly/Analysis/CudaParameterDetection.h"
+#include "golly/Analysis/PscopBuilder.h"
+#include "golly/Analysis/PscopDetector.h"
+#include "golly/Analysis/RaceDetection.h"
+#include "golly/Analysis/StatementDetection.h"
+
 #include <llvm/Analysis/RegionInfo.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
@@ -15,7 +17,7 @@ PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
     return PreservedAnalyses::none();
   }
 
-  fam.getResult<golly::RaceDetector>(f);
+  fam.getResult<golly::PscopDetectionPass>(f);
   return PreservedAnalyses::all();
 }
 } // namespace golly
@@ -33,6 +35,8 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
                   fam.registerPass(
                       []() { return golly::StatementDetectionPass(); });
                   fam.registerPass([]() { return golly::PscopBuilderPass(); });
+                  fam.registerPass(
+                      []() { return golly::PscopDetectionPass(); });
                   fam.registerPass([]() { return golly::RaceDetector(); });
                 });
 
