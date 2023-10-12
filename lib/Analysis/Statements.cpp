@@ -1,5 +1,6 @@
+
+#include "golly/Analysis/Statements.h"
 #include <array>
-#include <golly/Analysis/Statements.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/Debug.h>
@@ -102,6 +103,30 @@ string_view MemoryAccessStatement::getSuffix() const {
   }
   assert(false && "memory access should only be load or store");
   return {};
+}
+
+const llvm::Value *MemoryAccessStatement::getPointer() const {
+  auto operand = getPointerOperand();
+  assert(operand);
+  if (auto as_get_element = llvm::dyn_cast<llvm::GetElementPtrInst>(operand))
+    return as_get_element->getOperand(0);
+
+  if (auto type = operand->getType(); type && type->isPointerTy())
+    return operand;
+
+  assert(false);
+  return nullptr;
+}
+
+const llvm::Value *MemoryAccessStatement::getOffset() const {
+  auto operand = getPointerOperand();
+  assert(operand);
+  if (auto as_get_element = llvm::dyn_cast<llvm::GetElementPtrInst>(operand)) {
+    assert(as_get_element->getNumOperands() <= 2);
+    return as_get_element->getOperand(1);
+  }
+
+  return nullptr;
 }
 
 MemoryAccessStatement::Access MemoryAccessStatement::getAccessType() const {

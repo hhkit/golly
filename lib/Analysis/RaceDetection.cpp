@@ -27,14 +27,14 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   if (golly_verbose)
     llvm::dbgs() << pscop << "\n";
 
-  auto tid_to_stmt_inst = reverse(pscop.distribution_schedule);
+  auto tid_to_stmt_inst = reverse(pscop.thread_allocation);
 
   // this is Chatarasi's MHP relation, adapted to accommodate thread pairs
 
   auto &sync_times = pscop.sync_schedule;
 
   // enumerate all thread pairs
-  auto threads = range(pscop.distribution_schedule);
+  auto threads = range(pscop.thread_allocation);
   auto thread_pairs = universal(threads, threads) - identity(threads);
 
   // [S -> T] -> StmtInsts of S and T
@@ -54,10 +54,9 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   // ensure they are on different threads
   // [S->T] -> [SWriteInst -> TAccessInst]
   auto threads_to_wa = domain_intersect(
-      reverse(range_product(apply_range(domain_map(writes_to_accesses),
-                                        pscop.distribution_schedule),
-                            apply_range(range_map(writes_to_accesses),
-                                        pscop.distribution_schedule))),
+      reverse(range_product(
+          apply_range(domain_map(writes_to_accesses), pscop.thread_allocation),
+          apply_range(range_map(writes_to_accesses), pscop.thread_allocation))),
       wrap(thread_pairs));
 
   auto conflicting_syncs = ([&]() {
@@ -105,8 +104,8 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
              "these statements should definitely exist");
 
       auto clashing_tids = apply_range(
-          apply_domain(islpp::union_map{sampl}, pscop.distribution_schedule),
-          pscop.distribution_schedule);
+          apply_domain(islpp::union_map{sampl}, pscop.thread_allocation),
+          pscop.thread_allocation);
       auto single_pair = clean(sample(clashing_tids));
 
       {

@@ -33,16 +33,16 @@ template <typename IslTy, auto Deleter> class wrap<IslTy, Deleter> {
 public:
   using base = wrap;
 
-  explicit wrap(IslTy *ptr, bool owns = true) : ptr{ptr}, owns{owns} {}
-  wrap(wrap &&rhs) : ptr{rhs.ptr}, owns{rhs.owns} { rhs.owns = false; }
+  wrap() : wrap{nullptr} {}
+  explicit wrap(IslTy *ptr) : ptr{ptr} {}
+  wrap(wrap &&rhs) : ptr{rhs.ptr} { rhs.ptr = nullptr; }
   wrap &operator=(wrap &&rhs) {
     std::swap(ptr, rhs.ptr);
-    std::swap(owns, rhs.owns);
     return *this;
   }
 
   ~wrap() {
-    if (owns)
+    if (ptr)
       Deleter(ptr);
   };
 
@@ -50,13 +50,13 @@ public:
 
   // yields ownership
   IslTy *yield() {
-    owns = false;
-    return ptr;
+    auto store = ptr;
+    ptr = nullptr;
+    return store;
   };
 
 private:
   IslTy *ptr;
-  bool owns = true;
 };
 
 template <typename IslTy, auto Copier, auto Deleter>
@@ -352,6 +352,8 @@ CLOSED_BINOP(map, flat_cross, isl_map_flat_product);
 CLOSED_BINOP(map, apply_range, isl_map_apply_range);
 CLOSED_BINOP(map, apply_domain, isl_map_apply_domain);
 CLOSED_UNOP(map, reverse, isl_map_reverse)
+OPEN_BINOP(map, map, set, domain_intersect, isl_map_intersect_domain);
+OPEN_BINOP(map, map, set, range_intersect, isl_map_intersect_range);
 
 LEXICAL_OPERATORS(set, map);
 LEXICAL_OPERATORS(map, map);
@@ -512,6 +514,9 @@ template <typename Fn> void scan(const set &us, Fn &&fn) {
   OPEN_BINOP(TYPE, ID, ID, ge_##TYPE, isl_##ID##_ge_##TYPE)                    \
   OPEN_BINOP(TYPE, ID, ID, eq_##TYPE, isl_##ID##_eq_##TYPE)
 
+#define NE_OP(ID, TYPE)                                                        \
+  OPEN_BINOP(TYPE, ID, ID, ne_##TYPE, isl_##ID##_ne_##TYPE)
+
 #define COMPARABLE_EXPR(ID)                                                    \
   COMPARE_OPS(ID, set)                                                         \
   CLOSED_BINOP(ID, operator*, isl_##ID##_mul)
@@ -600,7 +605,9 @@ OPEN_UNOP(set, pw_aff, domain, isl_pw_aff_domain)
 NAME_DIM_OPERATION(multi_aff)
 
 COMPARABLE_EXPR(aff);
+NE_OP(aff, set);
 COMPARABLE_EXPR(pw_aff);
+NE_OP(pw_aff, set);
 COMPARE_OPS(pw_aff, map);
 CLOSED_BINOP(pw_aff, operator/, isl_pw_aff_tdiv_q)
 CLOSED_BINOP(pw_aff, operator%, isl_pw_aff_tdiv_r)
@@ -701,6 +708,7 @@ template <typename T> local_space get_local_space(T &&val) {
 }
 
 template <typename To, typename From> inline To cast(From val) {
+  static_assert(std::is_same_v<From, To>, "invalid cast");
   if constexpr (std::is_same_v<From, To>)
     return std::move(val);
 }
@@ -711,6 +719,7 @@ template <typename To, typename From> inline To cast(From val) {
   }
 
 CAST(aff, multi_aff)
+CAST(aff, pw_aff)
 
 template <typename T> inline T space::zero() const {
   auto val = aff{isl_aff_zero_on_domain_space(space{*this}.yield())};

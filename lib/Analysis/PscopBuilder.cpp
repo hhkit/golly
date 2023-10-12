@@ -1,9 +1,10 @@
+#include "golly/Analysis/PscopBuilder.h"
+#include "golly/Analysis/CudaParameterDetection.h"
+#include "golly/Analysis/StatementDetection.h"
+#include "golly/Support/Traversal.h"
+#include "golly/Support/isl_llvm.h"
+
 #include <fmt/format.h>
-#include <golly/Analysis/CudaParameterDetection.h>
-#include <golly/Analysis/PscopBuilder.h>
-#include <golly/Analysis/StatementDetection.h>
-#include <golly/Support/Traversal.h>
-#include <golly/Support/isl_llvm.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/Optional.h>
@@ -20,6 +21,7 @@
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/Debug.h>
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -176,7 +178,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &o, const QuaffExpr &e) {
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Pscop &pscop) {
   os << "domain:\n  " << pscop.instantiation_domain << "\n";
-  os << "distribution_schedule:\n  " << pscop.distribution_schedule << "\n";
+  os << "thread_allocation:\n  " << pscop.thread_allocation << "\n";
   os << "temporal_schedule:\n  " << pscop.temporal_schedule << "\n";
   os << "sync_schedule:\n  " << pscop.sync_schedule << "\n";
   os << "writes:\n  " << pscop.write_access_relation << "\n";
@@ -667,7 +669,7 @@ public:
     auto statement_domain = buildDomain(f, bb_analysis);
 
     LLVM_DEBUG(llvm::dbgs() << "    Distribution schedule construction\n");
-    auto distribution_schedule = buildDistributionSchedule(
+    auto thread_allocation = buildDistributionSchedule(
         statement_domain, fn_analysis, loop_analysis, bb_analysis);
 
     LLVM_DEBUG(llvm::dbgs() << "    Temporal schedule construction\n");
@@ -676,8 +678,8 @@ public:
 
     LLVM_DEBUG(llvm::dbgs() << "    Sync schedule construction\n");
     auto sync_schedule = buildSynchronizationSchedule(
-        f, fn_analysis, statement_domain, distribution_schedule,
-        temporal_schedule, bb_analysis);
+        f, fn_analysis, statement_domain, thread_allocation, temporal_schedule,
+        bb_analysis);
 
     LLVM_DEBUG(llvm::dbgs() << "    Access relation construction\n");
     auto access_relations =
@@ -686,7 +688,7 @@ public:
 
     return Pscop{
         .instantiation_domain = coalesce(statement_domain),
-        .distribution_schedule = coalesce(distribution_schedule),
+        .thread_allocation = coalesce(thread_allocation),
         .temporal_schedule = coalesce(temporal_schedule),
         .sync_schedule = coalesce(sync_schedule),
         .write_access_relation = coalesce(access_relations.writes),
@@ -1129,13 +1131,13 @@ public:
 
   islpp::union_map buildSynchronizationSchedule(
       Function &f, const FunctionInvariants &fn_analysis,
-      islpp::union_map statement_domain, islpp::union_map distribution_schedule,
+      islpp::union_map statement_domain, islpp::union_map thread_allocation,
       islpp::union_map temporal_schedule, BBAnalysis &bb_analysis) {
     islpp::union_map barrs{"{}"};
 
     const auto launched_threads =
         islpp::union_set{fn_analysis.distribution_domain};
-    const auto tid_to_stmt_inst = reverse(distribution_schedule);
+    const auto tid_to_stmt_inst = reverse(thread_allocation);
 
     // prepare expressions
 
@@ -1175,7 +1177,7 @@ public:
 
           // retrieve the active threads in this domain
           // { [cta,tid] }
-          const auto active_threads = apply(stmt_domain, distribution_schedule);
+          const auto active_threads = apply(stmt_domain, thread_allocation);
 
           if (is_empty(active_threads)) {
             llvm::outs()
@@ -1266,7 +1268,7 @@ public:
 
                   // get all threads involved with this statement
                   const auto stmt_distribution =
-                      domain_intersect(distribution_schedule, stmt_domain);
+                      domain_intersect(thread_allocation, stmt_domain);
 
                   // StmtInst -> tid
                   const auto waiting_lanes =
@@ -1306,7 +1308,7 @@ public:
     }
 
     // enumerate all thread pairs
-    auto threads = range(distribution_schedule);
+    auto threads = range(thread_allocation);
     auto thread_pairs = universal(threads, threads) - identity(threads);
 
     // [S -> T] -> StmtInsts of S and T
@@ -1375,7 +1377,7 @@ PscopBuilderPass::Result PscopBuilderPass::run(Function &f,
   if (f.getName() == "_Z10__syncwarpj") {
     return Pscop{
         .instantiation_domain = islpp::union_map{"{}"},
-        .distribution_schedule = islpp::union_map{"{}"},
+        .thread_allocation = islpp::union_map{"{}"},
         .temporal_schedule = islpp::union_map{"{}"},
         .sync_schedule = islpp::union_map{"{}"},
         .write_access_relation = islpp::union_map{"{}"},
