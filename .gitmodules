@@ -31,3 +31,9 @@
 [submodule "tests/simulee/gunrock"]
 	path = tests/simulee/gunrock
 	url = https://github.com/gunrock/gunrock
+[submodule "tests/Gklee"]
+	path = tests/Gklee
+	url = https://github.com/lipeng28/Gklee
+[submodule "tests/GkleeTests"]
+	path = tests/GkleeTests
+	url = https://github.com/Geof23/GkleeTests
