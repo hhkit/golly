@@ -103,7 +103,7 @@ struct ScevAffinator
 
       auto loop_expr =
           ISLPP_CHECK(space.coeff<islpp::pw_aff>(islpp::dim::in, pos, 1));
-      return loop_expr * *step;
+      return ISLPP_CHECK(loop_expr * *step);
     }
 
     auto zero_start = se.getAddRecExpr(se.getConstant(start->getType(), 0),
@@ -114,7 +114,7 @@ struct ScevAffinator
     auto start_expr = visit(start);
 
     if (res_expr && start_expr)
-      return *res_expr + *start_expr;
+      return ISLPP_CHECK(*res_expr + *start_expr);
     else
       return llvm::None;
   }
@@ -192,7 +192,6 @@ struct ConditionalAffinator
   };
 
   islpp::set visitICmpInst(llvm::ICmpInst &icmp) override {
-    llvm::dbgs() << icmp << "\n";
     auto lhs = icmp.getOperand(0);
     auto rhs = icmp.getOperand(1);
     assert(lhs);
@@ -244,6 +243,11 @@ islpp::pw_aff valuate(golly::InstantiationVariable::Expr expr,
   }
 }
 
+islpp::multi_aff null_tuple(islpp::space space) {
+  return islpp::multi_aff{isl_multi_aff_multi_val_on_space(
+      space.yield(), isl_multi_val_read_from_str(islpp::ctx(), "{[]}"))};
+}
+
 islpp::set spacify(const AffineContext &context, llvm::ScalarEvolution &se) {
   islpp::set s{"{ [] }"};
   s = add_dims(std::move(s), islpp::dim::set, context.induction_vars.size());
@@ -279,6 +283,39 @@ struct PolyhedralBuilder {
   llvm::ScalarEvolution &se;
   llvm::LoopInfo &li;
 
+  struct ThreadExpressions {
+    islpp::map tau2cta;
+    islpp::map tau2thread;
+    islpp::map thread2warpTuple;
+    islpp::map warpTuple2warp;
+    islpp::map warpTuple2lane;
+  };
+
+  ThreadExpressions createThreadExpressions() {
+    const auto &global = detection.getGlobalContext();
+
+    // get space
+    auto space = get_space(spacify(global, se));
+
+    // create cta getter
+    auto tau2cta = [&]() {
+      auto expr = null_tuple(space);
+
+      int index = 0;
+      for (auto &[val, iv] : global.induction_vars) {
+        if (iv.kind == InstantiationVariable::Kind::Block)
+          expr = flat_range_product(
+              expr, space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1));
+
+        ++index;
+      }
+
+      return expr;
+    }();
+
+    return ThreadExpressions{.tau2cta = islpp::map{tau2cta}};
+  }
+
   islpp::union_map constructDomain() {
     llvm::DenseMap<const llvm::BasicBlock *, islpp::set> domains;
 
@@ -287,7 +324,7 @@ struct PolyhedralBuilder {
       auto loop_info = detection.getLoopInfo(loop);
       auto domain = spacify(loop_info->context, se);
 
-      llvm::dbgs() << bb->getName() << domain << "\n";
+      // llvm::dbgs() << bb->getName() << domain << "\n";
       domains.insert({bb, std::move(domain)});
     });
 
@@ -315,7 +352,7 @@ struct PolyhedralBuilder {
         // taken
         auto param = islpp::add_param(space, br->getNameOrAsOperand());
         auto param_count = islpp::dims(param, islpp::dim::param);
-        llvm::dbgs() << "param name: " << param << "\n";
+        // llvm::dbgs() << "param name: " << param << "\n";
         auto val =
             param.coeff<islpp::pw_aff>(islpp::dim::param, param_count - 1, 1);
 
@@ -370,25 +407,211 @@ struct PolyhedralBuilder {
   }
 
   islpp::union_map constructTemporalSchedule(islpp::union_map domain) {
-
     struct LoopTime {
-      islpp::set domain{"{ [] }"};
-      int time = 0;
+      islpp::multi_aff prefix_expr;
+      islpp::space space;
+      int count = 0;
     };
 
     llvm::DenseMap<llvm::Loop *, LoopTime> times;
-    times[nullptr] = LoopTime{};
+    auto space = get_space(spacify(detection.getGlobalContext(), se));
 
+    // for time, we want to construct a null prefix time that we can build up
+    times[nullptr] = LoopTime{
+        .prefix_expr = islpp::multi_aff{isl_multi_aff_multi_val_on_space(
+            islpp::space{space}.yield(),
+            isl_multi_val_read_from_str(islpp::ctx(), "{[]}"))},
+        .space = space,
+        .count = 0};
+
+    auto get_parent = [this](llvm::Loop *loop) -> llvm::Loop * {
+      loop = loop->getParentLoop();
+      while (loop) {
+        if (detection.getLoopInfo(loop)->ivar_introduced)
+          return loop;
+        loop = loop->getParentLoop();
+      }
+      return nullptr;
+    };
+
+    const int max_depth = [&]() {
+      auto calcDepth = [&get_parent](llvm::Loop *loop) -> int {
+        int depth = 0;
+        while (loop) {
+          depth++;
+          loop = get_parent(loop);
+        }
+
+        return depth;
+      };
+
+      int max_depth = 0;
+      for (auto &loop : li.getLoopsInPreorder())
+        max_depth = std::max(calcDepth(loop), max_depth);
+
+      // 1 initial coutner + loops * (1 iteration var + 1 counter var)
+      return 1 + 2 * max_depth;
+    }();
+
+    islpp::union_map ret{"{}"};
     scc.traverse([&](const llvm::BasicBlock *bb) {
       auto loop = li.getLoopFor(bb);
-      if (auto itr = times.find(loop); itr != times.end()) {
-        // new loop, introduce new time
-      } else {
-        auto parent = loop->getParentLoop();
+      auto loop_context = detection.getLoopInfo(loop);
+      auto itr = times.find(loop_context->affine_loop);
+
+      if (itr == times.end()) {
+        // new affine loop
+        auto &metadata = times[get_parent(loop)];
+        auto my_count = metadata.count++;
+        auto my_space = add_dims(metadata.space, islpp::dim::set, 1);
+        auto my_expr = ([&]() {
+          auto v =
+              ISLPP_CHECK(add_dims(metadata.prefix_expr, islpp::dim::in, 1));
+          auto c = ISLPP_CHECK(my_space.constant<islpp::multi_aff>(my_count));
+          auto vc = ISLPP_CHECK(flat_range_product(std::move(v), std::move(c)));
+          auto p = ISLPP_CHECK(my_space.coeff<islpp::multi_aff>(
+              islpp::dim::in, dims(my_space, islpp::dim::set) - 1, 1));
+          return ISLPP_CHECK(flat_range_product(std::move(vc), std::move(p)));
+        })();
+
+        times[loop_context->affine_loop] =
+            LoopTime{.prefix_expr = my_expr, .space = my_space, .count = 0};
+        itr = times.find(loop_context->affine_loop);
+      }
+
+      // loop already exists, increment the counter
+      auto &metadata = itr->second;
+      auto space = metadata.space;
+      for (auto &elem : stmts.iterateStatements(*bb)) {
+        auto my_count = metadata.count++;
+        auto my_expr = ISLPP_CHECK(islpp::flat_range_product(
+            metadata.prefix_expr, space.constant<islpp::multi_aff>(my_count)));
+
+        while (dims(my_expr, islpp::dim::out) < max_depth)
+          my_expr = flat_range_product(my_expr, space.zero<islpp::multi_aff>());
+
+        auto my_map = islpp::map{name(my_expr, islpp::dim::in, elem.getName())};
+        ret = ret + ISLPP_CHECK(islpp::union_map{my_map});
       }
     });
 
-    return islpp::union_map{"{}"};
+    ret = domain_intersect(ret, range(domain));
+
+    return ret;
+  }
+
+  islpp::union_map constructValidBarriers(const ThreadExpressions &thread_exprs,
+                                          islpp::union_map domain,
+                                          islpp::union_map thread_alloc,
+                                          islpp::union_map temporal_schedule) {
+    // [S->T] -> Stmt
+    islpp::union_map beta{"{}"};
+
+    islpp::union_map rev_alloc = reverse(thread_alloc);
+    scc.traverse([&](const llvm::BasicBlock *bb) {
+      for (auto &stmt : stmts.iterateStatements(*bb)) {
+        if (auto bar_stmt = stmt.as<golly::BarrierStatement>()) {
+          islpp::union_set s{name(islpp::set{"{[]}"}, bar_stmt->getName())};
+          auto stmt_instances = apply(s, domain);
+          auto tid_to_insts = range_intersect(rev_alloc, stmt_instances);
+
+          auto &barrier = bar_stmt->getBarrier();
+          const auto active_threads = apply(stmt_instances, thread_alloc);
+
+          if (is_empty(active_threads)) {
+            llvm::outs()
+                << "warning: unreachable barrier\n"
+                << *bar_stmt->getDefiningInstruction().getDebugLoc().get()
+                << "\n";
+            continue;
+          }
+
+          const auto thread_pairs = universal(active_threads, active_threads) -
+                                    identity(active_threads);
+
+          if (auto warp_bar =
+                  std::get_if<golly::BarrierStatement::Warp>(&barrier)) {
+            warp_bar->mask;
+            // do things with mask
+          }
+
+          if (auto block_bar =
+                  std::get_if<golly::BarrierStatement::Block>(&barrier)) {
+            // collect all blocks in this statement
+
+            // inst -> tid
+            auto dmn_insts =
+                apply_range(domain_map(thread_pairs), tid_to_insts) +
+                apply_range(range_map(thread_pairs), tid_to_insts);
+
+            // filter to same gids
+            auto same_gid =
+                apply_range(islpp::union_map{thread_exprs.tau2cta},
+                            reverse(islpp::union_map{thread_exprs.tau2cta}));
+
+            beta = beta + domain_intersect(dmn_insts, wrap(same_gid));
+          }
+
+          if (auto global_bar =
+                  std::get_if<golly::BarrierStatement::End>(&barrier)) {
+            auto dmn_insts =
+                apply_range(domain_map(thread_pairs), tid_to_insts) +
+                apply_range(range_map(thread_pairs), tid_to_insts);
+            beta = beta + coalesce(dmn_insts);
+          }
+        }
+      }
+    });
+    return coalesce(beta);
+  }
+
+  islpp::union_map constructSynchronizationSchedule(
+      const ThreadExpressions &thd_exprs, islpp::union_map domain,
+      islpp::union_map thread_allocation, islpp::union_map temporal_schedule) {
+    auto beta = constructValidBarriers(thd_exprs, domain, thread_allocation,
+                                       temporal_schedule);
+
+    auto tid_to_stmt_inst = reverse(thread_allocation);
+
+    // enumerate all thread pairs
+    auto threads = range(thread_allocation);
+    auto thread_pairs = universal(threads, threads) - identity(threads);
+
+    // [S -> T] -> StmtInsts of S and T
+    auto dmn_insts =
+        apply_range(domain_map(thread_pairs),
+                    tid_to_stmt_inst) + // [ S -> T ] -> StmtInsts(S)
+        apply_range(range_map(thread_pairs),
+                    tid_to_stmt_inst); // [ S -> T ] -> StmtInsts(T)
+
+    // [[S -> T] -> StmtInst] -> Time
+    auto dmn_timings = apply_range(range_map(dmn_insts), temporal_schedule);
+
+    // [[S -> T] -> StmtInst] -> Time
+    auto sync_timings = apply_range(range_map(beta), temporal_schedule);
+
+    // [[S->T] -> StmtInst] -> [[S->T] -> SyncInst]
+    auto barrs_over_stmts = ([&]() {
+      //  [[S -> T] -> StmtInst] -> [[S -> T] -> SyncInst]
+      // but we have mismatched S->T
+      auto bars_lex_stmts = std::move(dmn_timings) <<= std::move(sync_timings);
+
+      // first, we zip to obtain: [[S->T] -> [S->T]] -> [StmtInst -> SyncInst]
+      auto zipped = zip(std::move(bars_lex_stmts));
+
+      // then we filter to [[S->T] == [S->T]] -> [StmtInst -> SyncInst]
+      auto filtered = domain_intersect(std::move(zipped),
+                                       wrap(identity(wrap(thread_pairs))));
+      // then we unzip to retrieve the original
+      // [[S->T] -> StmtInst] -> [[S->T] -> SyncInst]
+      return zip(std::move(filtered));
+    })();
+
+    // [[S->T] -> StmtInst] -> SyncTime
+    auto sync_times = lexmin(
+        apply_range(range_factor_range(barrs_over_stmts), temporal_schedule));
+
+    return sync_times;
   }
 
   std::pair<islpp::union_map, islpp::union_map>
@@ -456,16 +679,20 @@ Pscop PolyhedralBuilderPass::run(llvm::Function &f,
       .se = fam.getResult<llvm::ScalarEvolutionAnalysis>(f),
       .li = fam.getResult<llvm::LoopAnalysis>(f),
   };
+
+  const auto exprs = builder.createThreadExpressions();
   const auto domain = builder.constructDomain();
   const auto thread_alloc = builder.constructDistribution(domain);
-  const auto temporal_shedule = builder.constructTemporalSchedule(domain);
+  const auto temporal_schedule = builder.constructTemporalSchedule(domain);
+  const auto sync_schedule = builder.constructSynchronizationSchedule(
+      exprs, domain, thread_alloc, temporal_schedule);
   const auto [reads, writes] = builder.calculateAccessRelations(domain);
 
   return Pscop{
       .instantiation_domain = domain,
       .thread_allocation = thread_alloc,
-      .temporal_schedule = temporal_shedule,
-      .sync_schedule = islpp::union_map{"{}"},
+      .temporal_schedule = temporal_schedule,
+      .sync_schedule = sync_schedule,
       .write_access_relation = writes,
       .read_access_relation = reads,
   };

@@ -2,6 +2,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <golly/Analysis/CudaParameterDetection.h>
+#include <golly/Analysis/PolyhedralBuilder.h>
 #include <golly/Analysis/PscopBuilder.h>
 #include <golly/Analysis/RaceDetection.h>
 #include <golly/Analysis/StatementDetection.h>
@@ -23,7 +24,7 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
                << llvm::demangle(f.getName().str())
                << " with launch parameters: " << params << "\n";
 
-  const auto &pscop = fam.getResult<golly::PscopBuilderPass>(f);
+  const auto &pscop = fam.getResult<golly::PolyhedralBuilderPass>(f);
   if (golly_verbose)
     llvm::dbgs() << pscop << "\n";
 

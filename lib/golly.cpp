@@ -19,8 +19,8 @@ PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
   if (f.getName() == "_Z10__syncwarpj") {
     return PreservedAnalyses::none();
   }
-
-  llvm::outs() << fam.getResult<golly::PolyhedralBuilderPass>(f) << "\n";
+  fam.getResult<golly::RaceDetector>(f);
+  // llvm::outs() < < < < "\n";
   return PreservedAnalyses::all();
 }
 } // namespace golly

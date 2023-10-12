@@ -2,9 +2,11 @@
 import pathlib as path
 import subprocess as sp
 import io
+import os
 import uuid
 import argparse
 import tempfile
+import yaml
 
 golly_path = "./build/lib/golly.so"
 golly_repair_path = "./build/barrier-repair/golly-repair"
@@ -69,6 +71,7 @@ def analyze(file: path.Path, patchFile: path.Path, blockDim: str, gridDim: str, 
 
 def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, blockDim, gridDim, verbose, **kwargs):
     file = filename
+    print(file)
     if file.suffix == ".cu":
         # compile and canonicalize
         ll_file = file.with_suffix(".ll")
@@ -143,11 +146,26 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
-    workdir.mkdir(parents=True, exist_ok=True)
-    patchFile=f"{workdir}/pairs.out"
 
-    analysisPass(workdir=workdir, patchFile=patchFile, **vars(args))
+    if args.filename.suffix == ".yaml":
+        with open(args.filename, 'r') as file:
+            dir = os.path.splitext(args.filename)[0]
+            for item in yaml.safe_load(file):
+                f = item['file']
+                block = str(item['block'])
+                grid = str(item['grid'])
+                
+                workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
+                workdir.mkdir(parents=True, exist_ok=True)
+                patchFile=f"{workdir}/pairs.out"
+                analysisPass(workdir=workdir, patchFile=patchFile, **dict(vars(args), filename=path.Path(f"{dir}/{f}"), blockDim=block, gridDim=grid))
 
-    if args.repair:
-        repair(args.filename, workdir, clangArgs=args.clangArgs, patchFile=patchFile, blockDim=args.blockDim, gridDim=args.gridDim )
+
+    else:
+        workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
+        workdir.mkdir(parents=True, exist_ok=True)
+        patchFile=f"{workdir}/pairs.out"
+        analysisPass(workdir=workdir, patchFile=patchFile, **vars(args))
+
+        if args.repair:
+            repair(args.filename, workdir, clangArgs=args.clangArgs, patchFile=patchFile, blockDim=args.blockDim, gridDim=args.gridDim )

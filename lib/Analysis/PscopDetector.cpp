@@ -197,13 +197,18 @@ struct PscopDetection::Pimpl {
     for (auto &arg : f.args())
       global_context.parameters.insert(&arg);
 
+    for (auto &[dim, count] : cuda.getDimCounts()) {
+    }
+
     for (auto &bb : f)
       for (auto &instr : bb) {
         llvm::Value *value = &instr;
         if (auto intrin = cuda.getIntrinsic(value)) {
           if (intrin->type == IntrinsicType::id) {
             auto iv = InstantiationVariable{
-                .kind = InstantiationVariable::Kind::Thread,
+                .kind = (is_grid_dim(intrin->dim)
+                             ? InstantiationVariable::Kind::Block
+                             : InstantiationVariable::Kind::Thread),
                 .lower_bound = 0,
                 .upper_bound = cuda.getCount(intrin->dim)};
             thread_ids.emplace_back(iv);
@@ -237,6 +242,7 @@ struct PscopDetection::Pimpl {
         me.induction_vars[val] = iv;
         return LoopDetection{
             .context = me,
+            .affine_loop = loop,
             .ivar_introduced = iv,
         };
       }
@@ -247,14 +253,17 @@ struct PscopDetection::Pimpl {
 
   LoopAnalysis analyzeLoops() {
     auto analysis = LoopAnalysis{};
-    analysis[nullptr] = LoopDetection{.context = global_context};
+    analysis[nullptr] =
+        LoopDetection{.context = global_context, .affine_loop = nullptr};
 
     for (auto &loop : li.getLoopsInPreorder()) {
       auto parent_analysis = analysis[loop->getParentLoop()];
       if (auto my_analysis = validateLoop(loop, parent_analysis.context))
         analysis[loop] = std::move(*my_analysis);
       else
-        analysis[loop] = LoopDetection{.context = parent_analysis.context};
+        analysis[loop] =
+            LoopDetection{.context = parent_analysis.context,
+                          .affine_loop = parent_analysis.affine_loop};
     }
 
     return analysis;

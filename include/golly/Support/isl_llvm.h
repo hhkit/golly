@@ -21,13 +21,13 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &out, const T &val) {
 
 #define ISLPP_CHECK(VAL)                                                       \
   ([&]() {                                                                     \
-    auto v = (VAL);                                                            \
+    auto ISLPP_VAL = (VAL);                                                    \
     if (isl_ctx_last_error(islpp::ctx()) != isl_error::isl_error_none) {       \
       llvm::dbgs() << "Error in : " << __FILE__ << ":" << __LINE__ << "\n";    \
       llvm::dbgs() << "  " << isl_ctx_last_error_msg(islpp::ctx()) << "\n";    \
       std::terminate();                                                        \
     }                                                                          \
-    return v;                                                                  \
+    return ISLPP_VAL;                                                          \
   }())
 
 #endif /* GOLLY_SUPPORT_ISL_LLVM_H */

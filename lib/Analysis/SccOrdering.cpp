@@ -9,12 +9,16 @@ SccOrdering::SccOrdering(llvm::Function &f) {
   auto b = llvm::scc_begin(&f);
   auto e = llvm::scc_end(&f);
 
-  int counter = 0;
+  std::vector<const llvm::BasicBlock *> bbs;
   for (auto i = b; i != e; ++i) {
     auto &v = *i;
-    for (auto bbi = v.rbegin(); bbi != v.rend(); bbi++)
-      order[*bbi] = counter++;
+    for (auto bbi = v.begin(); bbi != v.end(); bbi++)
+      bbs.emplace_back(*bbi);
   }
+
+  int counter = 0;
+  for (auto itr = bbs.rbegin(); itr != bbs.rend(); ++itr)
+    order[*itr] = counter++;
 }
 
 int SccOrdering::getPosition(const llvm::BasicBlock *bb) const {

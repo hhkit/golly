@@ -17,6 +17,7 @@ namespace golly {
 
 struct InstantiationVariable {
   enum class Kind {
+    Block,
     Thread,
     Loop,
   };
@@ -38,6 +39,7 @@ struct AffineContext {
 
 struct LoopDetection {
   AffineContext context;
+  llvm::Loop *affine_loop;
   llvm::Optional<InstantiationVariable> ivar_introduced;
 };
 

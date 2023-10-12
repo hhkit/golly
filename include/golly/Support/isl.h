@@ -55,6 +55,8 @@ public:
     return store;
   };
 
+  wrap &&move() { return static_cast<wrap &&>(*this); }
+
 private:
   IslTy *ptr;
 };
@@ -197,8 +199,16 @@ class val : public detail::wrap<isl_val, isl_val_copy, isl_val_free> {
 
 class multi_val : public detail::wrap<isl_multi_val, isl_multi_val_copy,
                                       isl_multi_val_free> {
+public:
   using base::base;
+  explicit multi_val(string v)
+      : base{isl_multi_val_read_from_str(ctx(), v.data())} {}
 };
+
+inline multi_val name(multi_val m, string_view name) {
+  return multi_val{isl_multi_val_set_tuple_name(
+      m.yield(), isl_dim_type::isl_dim_cst, name.data())};
+}
 
 class union_map : public detail::wrap<isl_union_map, isl_union_map_copy,
                                       isl_union_map_free> {
@@ -579,11 +589,19 @@ MINMAX_EXPR(multi_pw_aff);
 DIMS(pw_aff)
 DIMS(multi_aff)
 
+inline multi_aff add_dims(multi_aff s, dim on, unsigned count) {
+  return multi_aff{
+      isl_multi_aff_add_dims(s.yield(), static_cast<isl_dim_type>(on), count)};
+}
+
+inline multi_aff drop_dims(multi_aff sp, dim d, int first, int n) {
+  return multi_aff{isl_multi_aff_drop_dims(
+      sp.yield(), static_cast<isl_dim_type>(d), first, n)};
+}
+
 inline pw_aff add_dims(pw_aff s, dim on, unsigned count) {
-  auto old_dim = dims(s, on);
-  auto new_pw_aff =
-      isl_pw_aff_add_dims(s.yield(), static_cast<isl_dim_type>(on), count);
-  return pw_aff{new_pw_aff};
+  return pw_aff{
+      isl_pw_aff_add_dims(s.yield(), static_cast<isl_dim_type>(on), count)};
 }
 
 inline aff set_coeff(aff a, dim on, unsigned pos, int val) {
@@ -752,6 +770,11 @@ inline T local_space::coeff(dim on, int index, int val) const {
   auto setted = aff{isl_aff_set_coefficient_si(
       zero<aff>().yield(), static_cast<isl_dim_type>(on), index, val)};
   return cast<T>(std::move(setted));
+}
+
+inline space add_dims(space sp, dim on, int count) {
+  return space{
+      isl_space_add_dims(sp.yield(), static_cast<isl_dim_type>(on), count)};
 }
 
 inline space add_param(space sp, string_view param) {
