@@ -674,6 +674,8 @@ public:
   using base::base;
 
   template <typename T> T zero() const;
+  template <typename T> T empty() const;
+  template <typename T> T identity() const;
   template <typename T> T constant(int val) const;
   template <typename T> T coeff(dim on, int pos, int val) const;
 };
@@ -742,6 +744,17 @@ CAST(aff, pw_aff)
 template <typename T> inline T space::zero() const {
   auto val = aff{isl_aff_zero_on_domain_space(space{*this}.yield())};
   return cast<T>(std::move(val));
+}
+
+template <typename T> inline T space::empty() const {
+  auto setted = set{isl_set_empty(space{*this}.yield())};
+  return cast<T>(std::move(setted));
+}
+
+template <typename T> inline T space::identity() const {
+  auto setted =
+      multi_aff{isl_space_identity_multi_aff_on_domain(space{*this}.yield())};
+  return cast<T>(std::move(setted));
 }
 
 template <typename T> inline T space::constant(int val) const {

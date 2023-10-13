@@ -153,7 +153,26 @@ struct ScevValidator : llvm::SCEVVisitor<ScevValidator, ExprClass> {
     if (context.induction_vars.find(value) != context.induction_vars.end())
       return ExprClass::IVar;
 
+    if (auto instr = llvm::dyn_cast<llvm::Instruction>(S->getValue())) {
+      switch (instr->getOpcode()) {
+      case llvm::BinaryOperator::SRem:
+        return visitSRemInstruction(instr);
+      default:
+        break;
+      }
+    }
     return ExprClass::Invalid;
+  }
+
+  RetVal visitSRemInstruction(llvm::Instruction *instr) {
+    auto lhs = visit(se.getSCEV(instr->getOperand(0)));
+    auto rhs = visit(se.getSCEV(instr->getOperand(1)));
+
+    // only modulo by a constant
+    if (rhs != ExprClass::Constant)
+      return ExprClass::Invalid;
+
+    return lhs;
   }
 
   RetVal visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) {

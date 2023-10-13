@@ -126,6 +126,15 @@ struct ScevAffinator
   RetVal visitUnknown(const llvm::SCEVUnknown *S) {
     const auto value = S->getValue();
 
+    if (auto instr = llvm::dyn_cast<llvm::Instruction>(S->getValue())) {
+      switch (instr->getOpcode()) {
+      case llvm::BinaryOperator::SRem:
+        return visitSRemInstruction(instr);
+      default:
+        break;
+      }
+    }
+
     if (auto itr = context.constants.find(value);
         itr != context.constants.end())
       return ISLPP_CHECK(space.constant<islpp::pw_aff>(itr->second));
@@ -141,6 +150,14 @@ struct ScevAffinator
       return ISLPP_CHECK(space.coeff<islpp::pw_aff>(islpp::dim::in, pos, 1));
 
     return llvm::None;
+  }
+  RetVal visitSRemInstruction(llvm::Instruction *instr) {
+    auto lhs = visit(se.getSCEV(instr->getOperand(0)));
+    auto rhs = visit(se.getSCEV(instr->getOperand(1)));
+    if (lhs && rhs)
+      return *lhs % *rhs;
+    else
+      return llvm::None;
   }
 
   RetVal visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) {
@@ -180,7 +197,7 @@ struct ConditionalAffinator
     auto rhs = llvm::dyn_cast<llvm::Instruction>(and_inst.getOperand(1));
     assert(lhs);
     assert(rhs);
-    return visit(*lhs) * visit(*rhs);
+    return ISLPP_CHECK(visit(*lhs) * visit(*rhs));
   };
 
   islpp::set visitOr(llvm::Instruction &or_inst) override {
@@ -188,8 +205,16 @@ struct ConditionalAffinator
     auto rhs = llvm::dyn_cast<llvm::Instruction>(or_inst.getOperand(1));
     assert(lhs);
     assert(rhs);
-    return visit(*lhs) + visit(*rhs);
+    return ISLPP_CHECK(visit(*lhs) + visit(*rhs));
   };
+
+  islpp::set visitSelectInst(llvm::SelectInst &select) {
+    auto selector = visitValue(select.getOperand(0));
+    auto true_branch = visitValue(select.getOperand(1));
+    auto false_branch = visitValue(select.getOperand(2));
+
+    return selector * true_branch;
+  }
 
   islpp::set visitICmpInst(llvm::ICmpInst &icmp) override {
     auto lhs = icmp.getOperand(0);
@@ -200,32 +225,56 @@ struct ConditionalAffinator
     auto lhscev = affinator.visit(lhs);
     auto rhscev = affinator.visit(rhs);
 
-    switch (icmp.getPredicate()) {
-    case llvm::ICmpInst::Predicate::ICMP_EQ:
-      return ISLPP_CHECK(islpp::eq_set(*lhscev, *rhscev));
-    case llvm::ICmpInst::Predicate::ICMP_NE:
-      return ISLPP_CHECK(islpp::ne_set(*lhscev, *rhscev));
-    case llvm::ICmpInst::Predicate::ICMP_UGE:
-    case llvm::ICmpInst::Predicate::ICMP_SGE:
-      return ISLPP_CHECK(islpp::ge_set(*lhscev, *rhscev));
-    case llvm::ICmpInst::Predicate::ICMP_UGT:
-    case llvm::ICmpInst::Predicate::ICMP_SGT:
-      return ISLPP_CHECK(islpp::gt_set(*lhscev, *rhscev));
-    case llvm::ICmpInst::Predicate::ICMP_ULE:
-    case llvm::ICmpInst::Predicate::ICMP_SLE:
-      return ISLPP_CHECK(islpp::le_set(*lhscev, *rhscev));
-    case llvm::ICmpInst::Predicate::ICMP_ULT:
-    case llvm::ICmpInst::Predicate::ICMP_SLT:
-      return ISLPP_CHECK(islpp::lt_set(*lhscev, *rhscev));
-      break;
-    default:
-      break;
+    if (lhscev && rhscev) {
+      ISLPP_CHECK(*lhscev);
+      ISLPP_CHECK(*rhscev);
+      switch (icmp.getPredicate()) {
+      case llvm::ICmpInst::Predicate::ICMP_EQ:
+        return ISLPP_CHECK(islpp::eq_set(*lhscev, *rhscev));
+      case llvm::ICmpInst::Predicate::ICMP_NE:
+        return ISLPP_CHECK(islpp::ne_set(*lhscev, *rhscev));
+      case llvm::ICmpInst::Predicate::ICMP_UGE:
+      case llvm::ICmpInst::Predicate::ICMP_SGE:
+        return ISLPP_CHECK(islpp::ge_set(*lhscev, *rhscev));
+      case llvm::ICmpInst::Predicate::ICMP_UGT:
+      case llvm::ICmpInst::Predicate::ICMP_SGT:
+        return ISLPP_CHECK(islpp::gt_set(*lhscev, *rhscev));
+      case llvm::ICmpInst::Predicate::ICMP_ULE:
+      case llvm::ICmpInst::Predicate::ICMP_SLE:
+        return ISLPP_CHECK(islpp::le_set(*lhscev, *rhscev));
+      case llvm::ICmpInst::Predicate::ICMP_ULT:
+      case llvm::ICmpInst::Predicate::ICMP_SLT:
+        return ISLPP_CHECK(islpp::lt_set(*lhscev, *rhscev));
+        break;
+      default:
+        break;
+      }
     }
 
     return ISLPP_CHECK(islpp::set{"{}"});
   }
 
-  islpp::set visitInstruction(llvm::Instruction &) { return islpp::set{"{}"}; };
+  islpp::set visitInstruction(llvm::Instruction &) {
+    return ISLPP_CHECK(islpp::set{"{}"});
+  };
+
+  islpp::set visitValue(llvm::Value *val) {
+    if (auto instr = llvm::dyn_cast<llvm::Instruction>(val))
+      return visit(instr);
+
+    if (auto constant = llvm::dyn_cast<llvm::Constant>(val)) {
+      assert(constant->getType()->getTypeID() == llvm::Type::IntegerTyID);
+      auto val = constant->getUniqueInteger();
+
+      if (val == 1)
+        return ISLPP_CHECK(
+            islpp::set{affinator.space.identity<islpp::multi_aff>()});
+      else
+        return ISLPP_CHECK(affinator.space.empty<islpp::set>());
+    }
+
+    return ISLPP_CHECK(islpp::set{"{}"});
+  };
 };
 
 islpp::pw_aff valuate(golly::InstantiationVariable::Expr expr,
@@ -268,6 +317,7 @@ islpp::set spacify(const AffineContext &context, llvm::ScalarEvolution &se) {
 islpp::set consolidate(llvm::Value *conditional, llvm::ScalarEvolution &se,
                        islpp::space space, const AffineContext &context) {
   ScevAffinator affinator{.se = se, .context = context, .space = space};
+  // llvm::dbgs() << *conditional << "\n";
   if (auto instr = llvm::dyn_cast<llvm::Instruction>(conditional))
     return ISLPP_CHECK(ConditionalAffinator{affinator}.visit(*instr));
   else
@@ -298,22 +348,33 @@ struct PolyhedralBuilder {
     auto space = get_space(spacify(global, se));
 
     // create cta getter
-    auto tau2cta = [&]() {
-      auto expr = null_tuple(space);
+    auto [tau2cta,
+          tau2thread] = [&]() -> std::pair<islpp::multi_aff, islpp::multi_aff> {
+      auto cta_expr = null_tuple(space);
+      auto thd_expr = null_tuple(space);
 
       int index = 0;
       for (auto &[val, iv] : global.induction_vars) {
         if (iv.kind == InstantiationVariable::Kind::Block)
-          expr = flat_range_product(
-              expr, space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1));
+          cta_expr = flat_range_product(
+              cta_expr,
+              space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1));
+
+        if (iv.kind == InstantiationVariable::Kind::Thread)
+          thd_expr = flat_range_product(
+              thd_expr,
+              space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1));
 
         ++index;
       }
 
-      return expr;
+      return {cta_expr, thd_expr};
     }();
 
-    return ThreadExpressions{.tau2cta = islpp::map{tau2cta}};
+    auto warpSize = 32; // let some oracle determine this
+
+    return ThreadExpressions{.tau2cta = islpp::map{tau2cta},
+                             .tau2thread = islpp::map{tau2thread}};
   }
 
   islpp::union_map constructDomain() {
@@ -417,12 +478,8 @@ struct PolyhedralBuilder {
     auto space = get_space(spacify(detection.getGlobalContext(), se));
 
     // for time, we want to construct a null prefix time that we can build up
-    times[nullptr] = LoopTime{
-        .prefix_expr = islpp::multi_aff{isl_multi_aff_multi_val_on_space(
-            islpp::space{space}.yield(),
-            isl_multi_val_read_from_str(islpp::ctx(), "{[]}"))},
-        .space = space,
-        .count = 0};
+    times[nullptr] =
+        LoopTime{.prefix_expr = null_tuple(space), .space = space, .count = 0};
 
     auto get_parent = [this](llvm::Loop *loop) -> llvm::Loop * {
       loop = loop->getParentLoop();
