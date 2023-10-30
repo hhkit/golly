@@ -88,6 +88,7 @@ struct ScevAffinator
   RetVal visitAddRecExpr(const llvm::SCEVAddRecExpr *S) {
     const auto start = S->getStart();
     const auto step = S->getStepRecurrence(se);
+    // llvm::dbgs() << *S << "\n";
 
     if (start->isZero()) {
       // todo
@@ -95,20 +96,29 @@ struct ScevAffinator
       if (!step)
         return llvm::None;
       // loop MUST exist
-      auto indvar = S->getLoop()->getCanonicalInductionVariable();
+      auto indvar = S->getLoop()->getInductionVariable(se);
+
+      assert(indvar);
 
       // get loop index in context
-      auto pos = context.getIndexOfIVar(indvar);
+      auto pos = context.getIVarIndex(indvar);
       assert(pos >= 0);
 
+      llvm::dbgs() << space << "\n";
       auto loop_expr =
           ISLPP_CHECK(space.coeff<islpp::pw_aff>(islpp::dim::in, pos, 1));
+      llvm::dbgs() << loop_expr << "\n";
+      llvm::dbgs() << *step << "\n";
       return ISLPP_CHECK(loop_expr * *step);
     }
 
     auto zero_start = se.getAddRecExpr(se.getConstant(start->getType(), 0),
                                        S->getStepRecurrence(se), S->getLoop(),
                                        S->getNoWrapFlags());
+    llvm::dbgs() << "dump: " << *S->getLoop() << '\n';
+    assert(S->getLoop());
+    assert(S->getLoop()->getBounds(se));
+    assert(S->getLoop()->getInductionVariable(se));
 
     auto res_expr = visit(zero_start);
     auto start_expr = visit(start);
@@ -146,7 +156,7 @@ struct ScevAffinator
           islpp::dim::param, dims(param_space, islpp::dim::param) - 1, 1));
     }
 
-    if (int pos = context.getIndexOfIVar(value); pos != -1)
+    if (int pos = context.getIVarIndex(value); pos != -1)
       return ISLPP_CHECK(space.coeff<islpp::pw_aff>(islpp::dim::in, pos, 1));
 
     return llvm::None;
@@ -155,7 +165,7 @@ struct ScevAffinator
     auto lhs = visit(se.getSCEV(instr->getOperand(0)));
     auto rhs = visit(se.getSCEV(instr->getOperand(1)));
     if (lhs && rhs)
-      return *lhs % *rhs;
+      return ISLPP_CHECK(*lhs % *rhs);
     else
       return llvm::None;
   }
@@ -173,7 +183,7 @@ struct ScevAffinator
       for (int i = 1; i < S->getNumOperands(); ++i) {
         auto inVal = visit(S->getOperand(i));
         if (inVal)
-          val = fn(std::move(*val), std::move(*inVal));
+          val = ISLPP_CHECK(fn(std::move(*val), std::move(*inVal)));
         else
           return llvm::None;
       }
@@ -251,12 +261,10 @@ struct ConditionalAffinator
       }
     }
 
-    return ISLPP_CHECK(islpp::set{"{}"});
+    return nullSet();
   }
 
-  islpp::set visitInstruction(llvm::Instruction &) {
-    return ISLPP_CHECK(islpp::set{"{}"});
-  };
+  islpp::set visitInstruction(llvm::Instruction &) { return nullSet(); };
 
   islpp::set visitValue(llvm::Value *val) {
     if (auto instr = llvm::dyn_cast<llvm::Instruction>(val))
@@ -267,14 +275,17 @@ struct ConditionalAffinator
       auto val = constant->getUniqueInteger();
 
       if (val == 1)
-        return ISLPP_CHECK(
-            islpp::set{affinator.space.identity<islpp::multi_aff>()});
+        return ISLPP_CHECK(islpp::set{affinator.space.universe<islpp::set>()});
       else
-        return ISLPP_CHECK(affinator.space.empty<islpp::set>());
+        return nullSet();
     }
 
-    return ISLPP_CHECK(islpp::set{"{}"});
+    return nullSet();
   };
+
+  islpp::set nullSet() {
+    return ISLPP_CHECK(affinator.space.empty<islpp::set>());
+  }
 };
 
 islpp::pw_aff valuate(golly::InstantiationVariable::Expr expr,
@@ -303,12 +314,12 @@ islpp::set spacify(const AffineContext &context, llvm::ScalarEvolution &se) {
 
   auto space = get_space(s);
   int i = 0;
-  for (auto &[ptr, iv] : context.induction_vars) {
+  for (auto &iv : context.induction_vars) {
     auto lb = valuate(iv.lower_bound, context, se, space);
     auto ub = valuate(iv.upper_bound, context, se, space);
     auto identity = space.coeff<islpp::pw_aff>(islpp::dim::in, i++, 1);
     auto set = le_set(lb, identity) * lt_set(identity, ub);
-    s = set * std::move(s);
+    s = ISLPP_CHECK(set * std::move(s));
   }
 
   return s;
@@ -320,8 +331,10 @@ islpp::set consolidate(llvm::Value *conditional, llvm::ScalarEvolution &se,
   // llvm::dbgs() << *conditional << "\n";
   if (auto instr = llvm::dyn_cast<llvm::Instruction>(conditional))
     return ISLPP_CHECK(ConditionalAffinator{affinator}.visit(*instr));
-  else
-    return islpp::set{"{}"};
+  if (auto constant = llvm::dyn_cast<llvm::Constant>(conditional))
+    return ISLPP_CHECK(ConditionalAffinator{affinator}.visitValue(constant));
+
+  return islpp::set{"{}"};
 }
 
 struct PolyhedralBuilder {
@@ -354,16 +367,16 @@ struct PolyhedralBuilder {
       auto thd_expr = null_tuple(space);
 
       int index = 0;
-      for (auto &[val, iv] : global.induction_vars) {
+      for (auto &iv : global.induction_vars) {
         if (iv.kind == InstantiationVariable::Kind::Block)
-          cta_expr = flat_range_product(
+          cta_expr = ISLPP_CHECK(flat_range_product(
               cta_expr,
-              space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1));
+              space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1)));
 
         if (iv.kind == InstantiationVariable::Kind::Thread)
-          thd_expr = flat_range_product(
+          thd_expr = ISLPP_CHECK(flat_range_product(
               thd_expr,
-              space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1));
+              space.coeff<islpp::multi_aff>(islpp::dim::in, index, 1)));
 
         ++index;
       }
@@ -393,25 +406,25 @@ struct PolyhedralBuilder {
       auto loop = li.getLoopFor(br->getParent());
       auto loop_info = detection.getLoopInfo(loop);
       auto space = get_space(domains[br->getParent()]);
+      auto br_dims = islpp::dims(space, islpp::dim::set);
       if (auto cond = detection.getBranchInfo(br)) {
         auto true_set = ISLPP_CHECK(
             consolidate(br->getCondition(), se, space, loop_info->context));
-        auto br_dims = islpp::dims(space, islpp::dim::set);
         for (auto &bb : cda.getTrueBranch(br)) {
           auto &dom = domains[bb];
           auto diff = islpp::dims(dom, islpp::dim::set) - br_dims;
-          dom = add_dims(true_set, islpp::dim::set, diff) * dom;
+          dom = ISLPP_CHECK(add_dims(true_set, islpp::dim::set, diff) * dom);
         }
 
         for (auto &bb : cda.getFalseBranch(br)) {
           auto &dom = domains[bb];
           auto diff = islpp::dims(dom, islpp::dim::set) - br_dims;
-          dom = dom - add_dims(true_set, islpp::dim::set, diff);
+          dom = ISLPP_CHECK(dom - add_dims(true_set, islpp::dim::set, diff));
         }
       } else {
         // non-affine branch, introduce a param to distinguish taken and not
         // taken
-        auto param = islpp::add_param(space, br->getNameOrAsOperand());
+        auto param = islpp::add_param(space, br->getName());
         auto param_count = islpp::dims(param, islpp::dim::param);
         // llvm::dbgs() << "param name: " << param << "\n";
         auto val =
@@ -424,12 +437,15 @@ struct PolyhedralBuilder {
         auto false_set = eq_set(val, one);
         for (auto &bb : cda.getTrueBranch(br)) {
           auto &dom = domains[bb];
-          dom = true_set * dom;
+          // llvm::dbgs() << true_set << " * " << dom << "\n";
+          auto diff = islpp::dims(dom, islpp::dim::set) - br_dims;
+          dom = ISLPP_CHECK(add_dims(true_set, islpp::dim::set, diff) * dom);
         }
 
         for (auto &bb : cda.getFalseBranch(br)) {
           auto &dom = domains[bb];
-          dom = false_set * dom;
+          auto diff = islpp::dims(dom, islpp::dim::set) - br_dims;
+          dom = ISLPP_CHECK(dom - add_dims(true_set, islpp::dim::set, diff));
         }
       }
     }
@@ -460,6 +476,7 @@ struct PolyhedralBuilder {
       std::vector<islpp::aff> affs;
       for (int i = 0; i < thread_dims; ++i)
         affs.emplace_back(sp.coeff<islpp::aff>(islpp::dim::in, i, 1));
+
       auto as_map = islpp::map{islpp::flat_range_product(affs)};
       ret = ret + islpp::union_map{domain_intersect(as_map, set)};
     });
@@ -484,7 +501,7 @@ struct PolyhedralBuilder {
     auto get_parent = [this](llvm::Loop *loop) -> llvm::Loop * {
       loop = loop->getParentLoop();
       while (loop) {
-        if (detection.getLoopInfo(loop)->ivar_introduced)
+        if (detection.getLoopInfo(loop)->is_affine)
           return loop;
         loop = loop->getParentLoop();
       }

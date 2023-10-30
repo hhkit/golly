@@ -1,6 +1,7 @@
 #ifndef ANALYSIS_PSCOPDETECTOR_H
 #define ANALYSIS_PSCOPDETECTOR_H
 
+#include "golly/Analysis/CudaParameterDetection.h"
 #include "golly/Analysis/SccOrdering.h"
 
 #include <llvm/ADT/MapVector.h>
@@ -23,24 +24,26 @@ struct InstantiationVariable {
   };
 
   using Expr = std::variant<llvm::Value *, int>;
+  const llvm::Value *value{};
   Kind kind;
   Expr lower_bound;
   Expr upper_bound;
+  llvm::Optional<Dimension> dim;
 };
 
 struct AffineContext {
-  llvm::MapVector<const llvm::Value *, InstantiationVariable> induction_vars;
+  std::vector<InstantiationVariable> induction_vars;
   llvm::DenseSet<llvm::Value *> parameters;
   llvm::MapVector<const llvm::Value *, int> constants;
 
-  int getIndexOfIVar(const llvm::Value *ptr) const;
+  int getIVarIndex(const llvm::Value *ptr) const;
   void dump(llvm::raw_ostream &os) const;
 };
 
 struct LoopDetection {
   AffineContext context;
   llvm::Loop *affine_loop;
-  llvm::Optional<InstantiationVariable> ivar_introduced;
+  bool is_affine;
 };
 
 struct ConditionalContext {

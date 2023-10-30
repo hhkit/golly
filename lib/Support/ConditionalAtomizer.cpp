@@ -1,6 +1,7 @@
 #include "golly/Support/ConditionalAtomizer.h"
 
 #include <llvm/IR/Instructions.h>
+#include <llvm/Support/raw_ostream.h>
 
 namespace golly {
 namespace detail {
@@ -19,10 +20,19 @@ void collect(llvm::Instruction *instr, llvm::SetVector<llvm::Value *> &set) {
 } // namespace detail
 
 llvm::SetVector<llvm::Value *> atomize(llvm::Value *cond) {
-  auto as_instr = llvm::dyn_cast<llvm::Instruction>(cond);
-  assert(as_instr);
-  auto collection = llvm::SetVector<llvm::Value *>();
-  detail::collect(as_instr, collection);
-  return collection;
+  if (auto as_instr = llvm::dyn_cast<llvm::Instruction>(cond)) {
+    auto collection = llvm::SetVector<llvm::Value *>();
+    detail::collect(as_instr, collection);
+    return collection;
+  }
+  if (auto as_const = llvm::dyn_cast<llvm::Constant>(cond)) {
+    auto type = as_const->getType();
+    assert(type->isIntegerTy() && type->getScalarSizeInBits() == 1);
+    auto collection = llvm::SetVector<llvm::Value *>();
+    collection.insert(cond);
+    return collection;
+  }
+
+  assert(false);
 }
 } // namespace golly

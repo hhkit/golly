@@ -910,7 +910,7 @@ public:
           case llvm::ICmpInst::ICMP_EQ:
             return eq_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_NE:
-            return -eq_set(*lhs, *rhs); // todo: probably wrong
+            return ne_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_SLT:
             return lt_set(*lhs, *rhs);
           case llvm::ICmpInst::ICMP_SLE:

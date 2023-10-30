@@ -676,6 +676,7 @@ public:
   template <typename T> T zero() const;
   template <typename T> T empty() const;
   template <typename T> T identity() const;
+  template <typename T> T universe() const;
   template <typename T> T constant(int val) const;
   template <typename T> T coeff(dim on, int pos, int val) const;
 };
@@ -755,6 +756,14 @@ template <typename T> inline T space::identity() const {
   auto setted =
       multi_aff{isl_space_identity_multi_aff_on_domain(space{*this}.yield())};
   return cast<T>(std::move(setted));
+}
+
+template <> inline set space::universe() const {
+  return set{isl_space_universe_set(space{*this}.yield())};
+}
+
+template <> inline map space::universe() const {
+  return map{isl_space_universe_map(space{*this}.yield())};
 }
 
 template <typename T> inline T space::constant(int val) const {

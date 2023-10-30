@@ -7,6 +7,7 @@
 #include "golly/Analysis/RaceDetection.h"
 #include "golly/Analysis/SccOrdering.h"
 #include "golly/Analysis/StatementDetection.h"
+#include "golly/Support/GollyOptions.h"
 
 #include <llvm/Analysis/RegionInfo.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -15,6 +16,43 @@
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 
 namespace golly {
+namespace detail {
+
+static bool checkParametrizedPassName(llvm::StringRef Name,
+                                      llvm::StringRef PassName) {
+  if (!Name.consume_front(PassName))
+    return false;
+  // normal pass name w/o parameters == default parameters
+  if (Name.empty())
+    return true;
+  return Name.startswith("<") && Name.endswith(">");
+}
+
+// stole this off the llvm source code
+template <typename ParametersParseCallableT>
+auto parsePassParameters(ParametersParseCallableT &&Parser,
+                         llvm::StringRef Name, llvm::StringRef PassName)
+    -> decltype(Parser(llvm::StringRef{})) {
+  using ParametersT = typename decltype(Parser(llvm::StringRef{}))::value_type;
+
+  llvm::StringRef Params = Name;
+  if (!Params.consume_front(PassName)) {
+    assert(false &&
+           "unable to strip pass name from parametrized pass specification");
+  }
+  if (!Params.empty() &&
+      (!Params.consume_front("<") || !Params.consume_back(">"))) {
+    assert(false && "invalid format for parametrized pass name");
+  }
+
+  llvm::Expected<ParametersT> Result = Parser(Params);
+  assert((Result || Result.template errorIsA<llvm::StringError>()) &&
+         "Pass parameter parser can only return StringErrors.");
+  return Result;
+}
+
+} // namespace detail
+
 PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
   if (f.getName() == "_Z10__syncwarpj") {
     return PreservedAnalyses::none();
@@ -50,10 +88,19 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
 
         PB.registerPipelineParsingCallback(
             [](StringRef Name, llvm::FunctionPassManager &PM,
-               ArrayRef<llvm::PassBuilder::PipelineElement>) {
+               ArrayRef<llvm::PassBuilder::PipelineElement>) -> bool {
               if (Name == "golly") {
                 PM.addPass(golly::RunGollyPass());
                 return true;
+
+                if (golly::detail::checkParametrizedPassName(Name, "golly")) {
+                  auto Params = golly::detail::parsePassParameters(
+                      golly::parseOptions, Name, "golly");
+                  if (!Params)
+                    return false;
+                  PM.addPass(golly::RunGollyPass(Params.get()));
+                  return true;
+                }
               }
               return false;
             });

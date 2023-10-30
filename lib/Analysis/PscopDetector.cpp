@@ -150,7 +150,7 @@ struct ScevValidator : llvm::SCEVVisitor<ScevValidator, ExprClass> {
     if (context.parameters.contains(value))
       return ExprClass::Param;
 
-    if (context.induction_vars.find(value) != context.induction_vars.end())
+    if (context.getIVarIndex(value) >= 0)
       return ExprClass::IVar;
 
     if (auto instr = llvm::dyn_cast<llvm::Instruction>(S->getValue())) {
@@ -205,7 +205,6 @@ struct PscopDetection::Pimpl {
   llvm::LoopInfo &li;
   llvm::ScalarEvolution &se;
 
-  std::vector<InstantiationVariable> thread_ids;
   AffineContext global_context;
 
   llvm::DenseMap<const llvm::BranchInst *, ConditionalContext>
@@ -217,6 +216,13 @@ struct PscopDetection::Pimpl {
       global_context.parameters.insert(&arg);
 
     for (auto &[dim, count] : cuda.getDimCounts()) {
+      global_context.induction_vars.emplace_back(InstantiationVariable{
+          .kind = (is_grid_dim(dim) ? InstantiationVariable::Kind::Block
+                                    : InstantiationVariable::Kind::Thread),
+          .lower_bound = 0,
+          .upper_bound = count,
+          .dim = dim,
+      });
     }
 
     for (auto &bb : f)
@@ -224,14 +230,12 @@ struct PscopDetection::Pimpl {
         llvm::Value *value = &instr;
         if (auto intrin = cuda.getIntrinsic(value)) {
           if (intrin->type == IntrinsicType::id) {
-            auto iv = InstantiationVariable{
-                .kind = (is_grid_dim(intrin->dim)
-                             ? InstantiationVariable::Kind::Block
-                             : InstantiationVariable::Kind::Thread),
-                .lower_bound = 0,
-                .upper_bound = cuda.getCount(intrin->dim)};
-            thread_ids.emplace_back(iv);
-            global_context.induction_vars[value] = iv;
+            for (auto &elem : global_context.induction_vars) {
+              if (elem.dim == intrin->dim) {
+                elem.value = value;
+                break;
+              }
+            }
           } else {
             // type is count
             global_context.constants[value] = cuda.getCount(intrin->dim);
@@ -251,18 +255,19 @@ struct PscopDetection::Pimpl {
       if (validator.visit(se.getSCEV(lower_bound)) != ExprClass::Invalid &&
           validator.visit(se.getSCEV(upper_bound)) != ExprClass::Invalid) {
         auto val = loop->getInductionVariable(se);
-        auto iv = InstantiationVariable{
+        assert(val);
+
+        auto me = context;
+        me.induction_vars.emplace_back(InstantiationVariable{
+            .value = val,
             .kind = InstantiationVariable::Kind::Loop,
             .lower_bound = lower_bound,
             .upper_bound = upper_bound,
-        };
-
-        auto me = context;
-        me.induction_vars[val] = iv;
+        });
         return LoopDetection{
             .context = me,
             .affine_loop = loop,
-            .ivar_introduced = iv,
+            .is_affine = true,
         };
       }
     }
@@ -272,8 +277,8 @@ struct PscopDetection::Pimpl {
 
   LoopAnalysis analyzeLoops() {
     auto analysis = LoopAnalysis{};
-    analysis[nullptr] =
-        LoopDetection{.context = global_context, .affine_loop = nullptr};
+    analysis[nullptr] = LoopDetection{
+        .context = global_context, .affine_loop = nullptr, .is_affine = true};
 
     for (auto &loop : li.getLoopsInPreorder()) {
       auto parent_analysis = analysis[loop->getParentLoop()];
@@ -282,7 +287,8 @@ struct PscopDetection::Pimpl {
       else
         analysis[loop] =
             LoopDetection{.context = parent_analysis.context,
-                          .affine_loop = parent_analysis.affine_loop};
+                          .affine_loop = parent_analysis.affine_loop,
+                          .is_affine = false};
     }
 
     return analysis;
@@ -368,7 +374,14 @@ const LoopDetection *PscopDetection::getLoopInfo(const llvm::Loop *loop) {
 const ConditionalContext *
 PscopDetection::getBranchInfo(const llvm::BranchInst *br) {
   auto itr = self->conditional_analysis.find(br);
-  return itr != self->conditional_analysis.end() ? &itr->second : nullptr;
+  if (itr == self->conditional_analysis.end())
+    return nullptr;
+
+  for (auto &elem : itr->second.atoms)
+    if (elem.second.is_affine == false)
+      return nullptr;
+
+  return &itr->second;
 }
 
 PscopDetection::PscopDetection(PscopDetection &&) noexcept = default;
@@ -382,16 +395,16 @@ golly::PscopDetectionPass::run(llvm::Function &f,
   return PscopDetection(f, fam);
 }
 } // namespace golly
-int golly::AffineContext::getIndexOfIVar(const llvm::Value *ptr) const {
+int golly::AffineContext::getIVarIndex(const llvm::Value *ptr) const {
   int i = 0;
-  for (auto &[val, iv] : induction_vars) {
-    if (val == ptr)
+  for (auto &iv : induction_vars) {
+    if (iv.value == ptr)
       return i;
     ++i;
   }
   return -1;
 }
 void golly::AffineContext::dump(llvm::raw_ostream &os) const {
-  for (auto &[val, iv] : induction_vars)
-    os << "iv[" << getIndexOfIVar(val) << "]: " << *val << "\n";
+  for (auto &iv : induction_vars)
+    os << "iv[" << getIVarIndex(iv.value) << "]: " << *iv.value << "\n";
 }

@@ -100,7 +100,7 @@ struct DimParser : cl::parser<dim3> {
     using namespace ctre;
 
     if (auto [whole, xs, ys, zs] =
-            ctre::match<"\\[(\\d+),(\\d+),(\\d+)\\]">(argValue);
+            ctre::match<"\\[(\\d+),\\s*(\\d+),\\s*(\\d+)\\]">(argValue);
         whole) {
       int x, y, z;
       std::from_chars(xs.begin(), xs.end(), x);
@@ -112,7 +112,7 @@ struct DimParser : cl::parser<dim3> {
       return false;
     };
 
-    if (auto [whole, xs, ys] = ctre::match<"\\[(\\d+),(\\d+)\\]">(argValue);
+    if (auto [whole, xs, ys] = ctre::match<"\\[(\\d+),\\s*(\\d+)\\]">(argValue);
         whole) {
       int x, y;
       std::from_chars(xs.begin(), xs.end(), x);
@@ -284,9 +284,6 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   IntrinsicFinder visitor{b};
   visitor.visit(f);
 
-  // llvm::dbgs() << "block dims: " << blockDims.getValue() << "\n";
-  // llvm::dbgs() << "grid dims: " << gridDims.getValue() << "\n";
-
   if (blockDims) {
     // oracle provided
     if (blockDims.x)
@@ -309,10 +306,15 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
       return !is_grid_dim(e.first);
     });
 
-    int i = 0;
-    for (auto &[dim, count] : b.wip.getDimCounts()) {
-      if (!is_grid_dim(dim))
-        b.addSize(dim, heurestic[c][i++]);
+    if (c == 0) // no dims detected, assume 1D block
+      b.addSize(Dimension::threadX, heurestic[1][0]);
+    else {
+
+      int i = 0;
+      for (auto &[dim, count] : b.wip.getDimCounts()) {
+        if (!is_grid_dim(dim))
+          b.addSize(dim, heurestic[c][i++]);
+      }
     }
   }
 
@@ -338,10 +340,15 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
       return is_grid_dim(e.first);
     });
 
-    int i = 0;
-    for (auto &[dim, count] : b.wip.getDimCounts()) {
-      if (is_grid_dim(dim))
-        b.addSize(dim, heurestic[c][i++]);
+    if (c == 0) // no dims detected, assume 1D block
+      b.addSize(Dimension::ctaX, heurestic[1][0]);
+    else {
+
+      int i = 0;
+      for (auto &[dim, count] : b.wip.getDimCounts()) {
+        if (is_grid_dim(dim))
+          b.addSize(dim, heurestic[c][i++]);
+      }
     }
   }
 

@@ -26,6 +26,7 @@ def compile(
             "--cuda-gpu-arch=sm_60",
             "-Xclang",
             "-disable-O0-optnone",
+            "-DPOLYBENCH_USE_SCALAR_LB",
             filename.resolve(),
         ]
         + ["" if showWarnings else "-w"]
@@ -71,7 +72,7 @@ def analyze(file: path.Path, patchFile: path.Path, blockDim: str, gridDim: str, 
 
 def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, blockDim, gridDim, verbose, **kwargs):
     file = filename
-    print(file)
+    print(f"{file} : b {blockDim} g {gridDim}")
     if file.suffix == ".cu":
         # compile and canonicalize
         ll_file = file.with_suffix(".ll")
@@ -159,7 +160,7 @@ if __name__ == "__main__":
                 workdir.mkdir(parents=True, exist_ok=True)
                 patchFile=f"{workdir}/pairs.out"
                 analysisPass(workdir=workdir, patchFile=patchFile, **dict(vars(args), filename=path.Path(f"{dir}/{f}"), blockDim=block, gridDim=grid))
-
+                print("\n")
 
     else:
         workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
