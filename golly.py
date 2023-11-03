@@ -11,6 +11,11 @@ import yaml
 golly_path = "./build/lib/golly.so"
 golly_repair_path = "./build/barrier-repair/golly-repair"
 
+class FuncDetection:
+    def __init__(self, name, blockDim, gridDim):
+        self.name = name
+        self.blockDim = blockDim
+        self.gridDim = gridDim
 
 def compile(
     filename: path.Path, workdir: path.Path, showWarnings: bool, clangArgs: [] = None
@@ -26,7 +31,7 @@ def compile(
             "--cuda-gpu-arch=sm_60",
             "-Xclang",
             "-disable-O0-optnone",
-            "-DPOLYBENCH_USE_SCALAR_LB",
+            # "-DPOLYBENCH_USE_SCALAR_LB",
             filename.resolve(),
         ]
         + ["" if showWarnings else "-w"]
@@ -52,27 +57,22 @@ def canonicalize(outfile: io.TextIOWrapper, workdir: path.Path):
     asm.wait()
 
 
-def analyze(file: path.Path, patchFile: path.Path, blockDim: str, gridDim: str, verbose: bool):
-    sp.run(
-        [
+def analyze(file: path.Path, patchFile: path.Path, config: path.Path, verbose: bool):
+    cmd = [
             "opt",
             "-load",
             f"{golly_path}",
             f"--load-pass-plugin={golly_path}",
-            "--passes=golly",
+            "--passes=golly" + (f"<config={config}>" if config is not None else ""),
             "--disable-output",
             file.resolve(),
-        ]
-        + (["--golly-block-dims", blockDim] if blockDim is not None else [])
-        + (["--golly-grid-dims", gridDim] if gridDim is not None else [])
-        + (["--golly-verbose"] if verbose else [])
-        + ([f"--golly-out={patchFile}" if patchFile is not None else []])
-    )
+        ] + (["--golly-verbose"] if verbose else []) + ([f"--golly-out={patchFile}" if patchFile is not None else []])
+    print("command: " + " ".join(map(str, cmd)))
+    sp.run(cmd)
 
 
-def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, blockDim, gridDim, verbose, **kwargs):
+def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, config: path.Path, verbose, **kwargs):
     file = filename
-    print(f"{file} : b {blockDim} g {gridDim}")
     if file.suffix == ".cu":
         # compile and canonicalize
         ll_file = file.with_suffix(".ll")
@@ -85,7 +85,7 @@ def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, blockDim
 
     assert file.exists()
 
-    analyze(file, patchFile=patchFile, blockDim=blockDim, gridDim=gridDim, verbose=verbose)
+    analyze(file, patchFile=patchFile, config=config, verbose=verbose)
 
 def raceDetected(patchFile: path.Path) -> bool:
     return patchFile.exists() and patchFile.stat().st_size > 2
@@ -106,7 +106,7 @@ def repair(file: path.Path, workdir:path.Path, clangArgs, patchFile: path.Path, 
     for f in tmp_dir.glob("*"):
         print(f"attempt repair with {f}")
         workdir2 = path.Path(f"{workdir}/{hash(f)}")
-        analysisPass(f, workdir=workdir2, patchFile=scratch, showWarnings=False, clangArgs=clangArgs, blockDim=blockDim, gridDim=gridDim, verbose=False)
+        analysisPass(f, workdir=workdir2, patchFile=scratch, showWarnings=False, clangArgs=clangArgs, verbose=False)
         if raceDetected(scratch):
             print(f"repair failed with {f}")
             scratch.unlink()
@@ -153,13 +153,16 @@ if __name__ == "__main__":
             dir = os.path.splitext(args.filename)[0]
             for item in yaml.safe_load(file):
                 f = item['file']
-                block = str(item['block'])
-                grid = str(item['grid'])
-                
+                kernels = item.get('kernels')
+                assert(type(kernels) == type([])) # kernels should be an array 
+
                 workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
                 workdir.mkdir(parents=True, exist_ok=True)
+                configFile=f"{workdir}/cfg"
+                with open(configFile, 'w') as cfg:
+                    yaml.safe_dump(kernels, cfg)
                 patchFile=f"{workdir}/pairs.out"
-                analysisPass(workdir=workdir, patchFile=patchFile, **dict(vars(args), filename=path.Path(f"{dir}/{f}"), blockDim=block, gridDim=grid))
+                analysisPass(workdir=workdir, patchFile=patchFile, config=configFile, **dict(vars(args), filename=path.Path(f"{dir}/{f}")))
                 print("\n")
 
     else:

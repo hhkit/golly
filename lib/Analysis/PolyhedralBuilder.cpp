@@ -10,6 +10,7 @@
 
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
+#include <llvm/Support/FormatVariadic.h>
 
 namespace golly {
 
@@ -98,27 +99,24 @@ struct ScevAffinator
       // loop MUST exist
       auto indvar = S->getLoop()->getInductionVariable(se);
 
-      assert(indvar);
+      if (!indvar)
+        return llvm::None;
 
       // get loop index in context
       auto pos = context.getIVarIndex(indvar);
       assert(pos >= 0);
 
-      llvm::dbgs() << space << "\n";
+      // llvm::dbgs() << space << "\n";
       auto loop_expr =
           ISLPP_CHECK(space.coeff<islpp::pw_aff>(islpp::dim::in, pos, 1));
-      llvm::dbgs() << loop_expr << "\n";
-      llvm::dbgs() << *step << "\n";
+      // llvm::dbgs() << loop_expr << "\n";
+      // llvm::dbgs() << *step << "\n";
       return ISLPP_CHECK(loop_expr * *step);
     }
 
     auto zero_start = se.getAddRecExpr(se.getConstant(start->getType(), 0),
                                        S->getStepRecurrence(se), S->getLoop(),
                                        S->getNoWrapFlags());
-    llvm::dbgs() << "dump: " << *S->getLoop() << '\n';
-    assert(S->getLoop());
-    assert(S->getLoop()->getBounds(se));
-    assert(S->getLoop()->getInductionVariable(se));
 
     auto res_expr = visit(zero_start);
     auto start_expr = visit(start);
@@ -424,7 +422,9 @@ struct PolyhedralBuilder {
       } else {
         // non-affine branch, introduce a param to distinguish taken and not
         // taken
-        auto param = islpp::add_param(space, br->getName());
+        static int counter = 0;
+        auto param =
+            islpp::add_param(space, llvm::formatv("b{0}", counter++).str());
         auto param_count = islpp::dims(param, islpp::dim::param);
         // llvm::dbgs() << "param name: " << param << "\n";
         auto val =
@@ -437,7 +437,6 @@ struct PolyhedralBuilder {
         auto false_set = eq_set(val, one);
         for (auto &bb : cda.getTrueBranch(br)) {
           auto &dom = domains[bb];
-          // llvm::dbgs() << true_set << " * " << dom << "\n";
           auto diff = islpp::dims(dom, islpp::dim::set) - br_dims;
           dom = ISLPP_CHECK(add_dims(true_set, islpp::dim::set, diff) * dom);
         }

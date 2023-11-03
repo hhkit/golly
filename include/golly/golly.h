@@ -15,6 +15,8 @@ public:
   RunGollyPass() = default;
   RunGollyPass(GollyOptions &opt);
   PreservedAnalyses run(Function &f, FunctionAnalysisManager &fam);
+
+  static llvm::Optional<GollyOptions> getOptions();
 };
 
 } // namespace golly

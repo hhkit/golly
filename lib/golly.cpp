@@ -53,7 +53,14 @@ auto parsePassParameters(ParametersParseCallableT &&Parser,
 
 } // namespace detail
 
+static llvm::Optional<GollyOptions> options;
+
+llvm::Optional<GollyOptions> RunGollyPass::getOptions() { return options; }
+
+golly::RunGollyPass::RunGollyPass(GollyOptions &opt) { options = opt; }
+
 PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
+
   if (f.getName() == "_Z10__syncwarpj") {
     return PreservedAnalyses::none();
   }
@@ -89,19 +96,19 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
         PB.registerPipelineParsingCallback(
             [](StringRef Name, llvm::FunctionPassManager &PM,
                ArrayRef<llvm::PassBuilder::PipelineElement>) -> bool {
-              if (Name == "golly") {
-                PM.addPass(golly::RunGollyPass());
+              // if (Name == "golly") {
+              //   // PM.addPass(golly::RunGollyPass());
+              //   // return true;
+              // }
+              if (golly::detail::checkParametrizedPassName(Name, "golly")) {
+                auto Params = golly::detail::parsePassParameters(
+                    golly::parseOptions, Name, "golly");
+                if (!Params)
+                  return false;
+                PM.addPass(golly::RunGollyPass(Params.get()));
                 return true;
-
-                if (golly::detail::checkParametrizedPassName(Name, "golly")) {
-                  auto Params = golly::detail::parsePassParameters(
-                      golly::parseOptions, Name, "golly");
-                  if (!Params)
-                    return false;
-                  PM.addPass(golly::RunGollyPass(Params.get()));
-                  return true;
-                }
               }
+
               return false;
             });
       }};

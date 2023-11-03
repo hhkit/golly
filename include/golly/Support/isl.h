@@ -218,6 +218,7 @@ public:
   explicit union_map(string_view isl = "{}");
 };
 MAP_OPERATORS(union_map, union_set);
+DIMS(union_map)
 
 CLOSED_UNOP(union_map, reverse, isl_union_map_reverse)
 SET_OPERATORS(union_map)
@@ -423,6 +424,9 @@ inline basic_map clean(basic_map s) {
   auto dims = isl_basic_map_dim(s.get(), isl_dim_type::isl_dim_param);
   return basic_map{isl_basic_map_remove_dims(
       s.yield(), isl_dim_type::isl_dim_param, 0, dims)};
+}
+inline union_map clean(union_map s) {
+  return union_map{isl_union_map_remove_redundancies(s.yield())};
 }
 
 template <typename Fn> void for_each(const union_set &us, Fn &&fn) {

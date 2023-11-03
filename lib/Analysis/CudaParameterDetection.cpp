@@ -1,7 +1,9 @@
+#include "golly/Analysis/CudaParameterDetection.h"
+#include "golly/Support/GollyOptions.h"
+#include "golly/golly.h"
 #include <charconv>
 #include <ctre-unicode.hpp>
 #include <fmt/format.h>
-#include <golly/Analysis/CudaParameterDetection.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/Support/CommandLine.h>
@@ -49,12 +51,6 @@ const static std::map<Dimension, string_view> dimensionAliasLut{
 };
 
 namespace cl = llvm::cl;
-
-struct dim3 {
-  Optional<int> x, y, z;
-
-  explicit operator bool() const { return x || y || z; }
-};
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const dim3 &d) {
   if (!d)
@@ -138,13 +134,6 @@ struct DimParser : cl::parser<dim3> {
     return false;
   }
 };
-
-static cl::opt<dim3, false, DimParser> gridDims("golly-grid-dims",
-                                                cl::desc("Grid dimensions"),
-                                                cl::value_desc("x | (x,y,z)"));
-static cl::opt<dim3, false, DimParser> blockDims("golly-block-dims",
-                                                 cl::desc("Block dimensions"),
-                                                 cl::value_desc("x | (x,y,z)"));
 
 Optional<Intrinsic> CudaParameters::getIntrinsic(const llvm::Value *val) const {
   if (auto itr = detections.find(val); itr != detections.end())
@@ -284,6 +273,23 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   IntrinsicFinder visitor{b};
   visitor.visit(f);
 
+  auto opt = RunGollyPass::getOptions();
+  auto name = f.getName();
+
+  auto ptr = ([&]() -> golly::GollyOptions::Params * {
+    if (!opt)
+      return nullptr;
+    for (auto &elem : opt->function_parameters) {
+      llvm::dbgs() << "check [" << elem.getKey() << "]\n";
+      if (name.contains(elem.getKey()))
+        return &elem.getValue();
+    }
+    return nullptr;
+  })();
+
+  dim3 blockDims = ptr ? ptr->block : dim3{};
+  dim3 gridDims = ptr ? ptr->grid : dim3{};
+
   if (blockDims) {
     // oracle provided
     if (blockDims.x)
@@ -309,7 +315,6 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
     if (c == 0) // no dims detected, assume 1D block
       b.addSize(Dimension::threadX, heurestic[1][0]);
     else {
-
       int i = 0;
       for (auto &[dim, count] : b.wip.getDimCounts()) {
         if (!is_grid_dim(dim))

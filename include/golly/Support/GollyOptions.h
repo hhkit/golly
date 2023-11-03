@@ -5,14 +5,17 @@
 #include <llvm/ADT/Optional.h>
 #include <llvm/ADT/StringMap.h>
 
-namespace llvm {
-class Function;
-}
-
 namespace golly {
+
+struct dim3 {
+  Optional<int> x, y, z;
+
+  explicit operator bool() const { return x || y || z; }
+};
+
 struct GollyOptions {
   struct Params {
-    std::map<Intrinsic, int> dim_counts;
+    dim3 block, grid;
   };
 
   llvm::StringMap<Params> function_parameters;
