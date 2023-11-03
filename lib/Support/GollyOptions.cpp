@@ -19,13 +19,10 @@ static std::string trim(const std::string &str) {
 }
 
 llvm::Expected<GollyOptions> parseOptions(llvm::StringRef params) {
-  llvm::dbgs() << params << "gtest\n";
-
   if (params.empty())
     return GollyOptions();
 
   if (params.consume_front("config=")) {
-    llvm::dbgs() << "loading " << params << "\n";
     if (auto buf = llvm::MemoryBuffer::getFile(params, true)) {
       auto config = ryml::parse_in_arena((*buf)->getBuffer().data());
       assert(config.is_seq(0) && "for now, only accept arrays");

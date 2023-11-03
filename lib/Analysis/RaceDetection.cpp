@@ -1,14 +1,15 @@
+#include "golly/Analysis/RaceDetection.h"
+#include "golly/Analysis/CudaParameterDetection.h"
+#include "golly/Analysis/PolyhedralBuilder.h"
+#include "golly/Analysis/PscopBuilder.h"
+#include "golly/Analysis/StatementDetection.h"
+#include "golly/Support/isl_llvm.h"
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
-#include <golly/Analysis/CudaParameterDetection.h>
-#include <golly/Analysis/PolyhedralBuilder.h>
-#include <golly/Analysis/PscopBuilder.h>
-#include <golly/Analysis/RaceDetection.h>
-#include <golly/Analysis/StatementDetection.h>
-#include <golly/Support/isl_llvm.h>
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/DebugInfo.h>
+#include <llvm/Support/WithColor.h>
 
 llvm::cl::opt<bool> golly_verbose("golly-verbose",
                                   llvm::cl::desc("verbose output"));
@@ -18,11 +19,17 @@ llvm::cl::opt<std::string> out_file("golly-out", llvm::cl::desc("output file"));
 namespace golly {
 AnalysisKey RaceDetector::Key;
 
+static std::string symbolOnly(std::string_view str) {
+  auto pos = str.find_first_of("(");
+  return std::string(str.substr(0, pos));
+}
+
 Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   const auto &params = fam.getResult<golly::CudaParameterDetection>(f);
-  llvm::outs() << "Running race detection of "
-               << llvm::demangle(f.getName().str())
-               << " with launch parameters: " << params << "\n";
+  llvm::outs() << "Race detection of ";
+  llvm::WithColor(llvm::outs(), llvm::raw_ostream::MAGENTA, true, false)
+      << symbolOnly(llvm::demangle(f.getName().str()));
+  llvm::outs() << " using " << params << ": ";
 
   const auto &pscop = fam.getResult<golly::PolyhedralBuilderPass>(f);
   if (golly_verbose)
@@ -146,8 +153,7 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
       }
     });
   } else {
-    llvm::outs() << "No race detected in " << llvm::demangle(f.getName().str())
-                 << "\n";
+    llvm::WithColor(llvm::outs(), llvm::raw_ostream::GREEN, true) << "Clear!\n";
   }
   return {};
 }
