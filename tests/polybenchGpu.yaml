@@ -126,11 +126,16 @@
   - name: lu_kernel2
     grid: [64,256]
     block: [32,8]
+# - file: CUDA/MVT/mvt.cu
+#   kernels:
+#   - name: mvt_kernel # same grid block
+#     grid: [128,1]
+#     block: [32,8] 
 - file: CUDA/MVT/mvt.cu
   kernels:
   - name: mvt_kernel # same grid block
-    grid: [128,1]
-    block: [32,8] 
+    grid: [16,1]
+    block: [256,1] 
 - file: CUDA/SYR2K/syr2k.cu
   kernels:
   - name: syr2k_kernel
