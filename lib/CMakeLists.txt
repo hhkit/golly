@@ -6,7 +6,6 @@ add_llvm_pass_plugin(golly MODULE
     Analysis/CudaParameterDetection.cpp
     Analysis/PolyhedralBuilder.cpp
     Analysis/PscopDetector.cpp
-    Analysis/PscopBuilder.cpp
     Analysis/RaceDetection.cpp
     Analysis/SccOrdering.cpp
     Analysis/StatementDetection.cpp

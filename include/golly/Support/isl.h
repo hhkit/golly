@@ -362,6 +362,8 @@ CLOSED_UNOP(map, flatten, isl_map_flatten);
 CLOSED_BINOP(map, flat_cross, isl_map_flat_product);
 CLOSED_BINOP(map, apply_range, isl_map_apply_range);
 CLOSED_BINOP(map, apply_domain, isl_map_apply_domain);
+CLOSED_UNOP(map, domain_map, isl_map_domain_map);
+CLOSED_UNOP(map, range_map, isl_map_range_map);
 CLOSED_UNOP(map, reverse, isl_map_reverse)
 OPEN_BINOP(map, map, set, domain_intersect, isl_map_intersect_domain);
 OPEN_BINOP(map, map, set, range_intersect, isl_map_intersect_range);
@@ -745,6 +747,7 @@ template <typename To, typename From> inline To cast(From val) {
 
 CAST(aff, multi_aff)
 CAST(aff, pw_aff)
+CAST(pw_aff, multi_pw_aff)
 
 template <typename T> inline T space::zero() const {
   auto val = aff{isl_aff_zero_on_domain_space(space{*this}.yield())};

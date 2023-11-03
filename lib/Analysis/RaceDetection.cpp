@@ -1,7 +1,6 @@
 #include "golly/Analysis/RaceDetection.h"
 #include "golly/Analysis/CudaParameterDetection.h"
 #include "golly/Analysis/PolyhedralBuilder.h"
-#include "golly/Analysis/PscopBuilder.h"
 #include "golly/Analysis/StatementDetection.h"
 #include "golly/Support/isl_llvm.h"
 #include <filesystem>

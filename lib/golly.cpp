@@ -2,7 +2,6 @@
 #include "golly/Analysis/ConditionalDominanceAnalysis.h"
 #include "golly/Analysis/CudaParameterDetection.h"
 #include "golly/Analysis/PolyhedralBuilder.h"
-#include "golly/Analysis/PscopBuilder.h"
 #include "golly/Analysis/PscopDetector.h"
 #include "golly/Analysis/RaceDetection.h"
 #include "golly/Analysis/SccOrdering.h"
@@ -88,7 +87,6 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
                   []() { return golly::CudaParameterDetection(); });
               fam.registerPass(
                   []() { return golly::StatementDetectionPass(); });
-              fam.registerPass([]() { return golly::PscopBuilderPass(); });
               fam.registerPass([]() { return golly::PscopDetectionPass(); });
               fam.registerPass([]() { return golly::RaceDetector(); });
             });
