@@ -300,9 +300,13 @@ struct PscopDetection::Pimpl {
       switch (as_cmp->getPredicate()) {
       case llvm::CmpInst::Predicate::ICMP_EQ:
       case llvm::CmpInst::Predicate::ICMP_NE:
+      case llvm::CmpInst::Predicate::ICMP_ULT:
       case llvm::CmpInst::Predicate::ICMP_SLT:
+      case llvm::CmpInst::Predicate::ICMP_ULE:
       case llvm::CmpInst::Predicate::ICMP_SLE:
+      case llvm::CmpInst::Predicate::ICMP_UGT:
       case llvm::CmpInst::Predicate::ICMP_SGT:
+      case llvm::CmpInst::Predicate::ICMP_UGE:
       case llvm::CmpInst::Predicate::ICMP_SGE: {
         auto validator = ScevValidator{
             .se = se,

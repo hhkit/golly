@@ -94,8 +94,12 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
 
   conflicting_syncs = clean(conflicting_syncs);
 
-  if (!is_empty(conflicting_syncs) &&
-      islpp::dims(conflicting_syncs, islpp::dim::param) == 0) {
+  bool has_conflicts = !is_empty(conflicting_syncs);
+
+  // comment out to reduce strictness
+  has_conflicts &= islpp::dims(conflicting_syncs, islpp::dim::param) == 0;
+
+  if (has_conflicts) {
     const auto &stmt_info = fam.getResult<golly::StatementDetectionPass>(f);
 
     auto conflicting_statements =

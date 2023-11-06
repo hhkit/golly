@@ -1,4 +1,5 @@
 #include "golly/Analysis/PolyhedralBuilder.h"
+#include "PolyhedralBuilderSupport.h"
 #include "golly/Analysis/ConditionalDominanceAnalysis.h"
 #include "golly/Analysis/CudaParameterDetection.h"
 #include "golly/Analysis/PscopDetector.h"
@@ -9,280 +10,11 @@
 
 #include <fmt/format.h>
 
-#include <llvm/Analysis/LoopInfo.h>
-#include <llvm/Analysis/ScalarEvolutionExpressions.h>
 #include <llvm/Support/FormatVariadic.h>
 
 namespace golly {
 
 using namespace islpp;
-
-struct ScevAffinator
-    : llvm::SCEVVisitor<ScevAffinator, llvm::Optional<pw_aff>> {
-  using Base = llvm::SCEVVisitor<ScevAffinator, llvm::Optional<pw_aff>>;
-  using RetVal = llvm::Optional<pw_aff>;
-  using Combinator = pw_aff (*)(pw_aff, pw_aff);
-
-  llvm::ScalarEvolution &se;
-  const AffineContext &context;
-
-  space sp;
-
-  RetVal visitConstant(const llvm::SCEVConstant *cint) {
-    return sp.constant<pw_aff>(cint->getAPInt().getSExtValue());
-  }
-
-  RetVal visitAddExpr(const llvm::SCEVAddExpr *S) {
-    return mergeNary(S, [](pw_aff lhs, pw_aff rhs) { return lhs + rhs; });
-  }
-
-  RetVal visitMulExpr(const llvm::SCEVMulExpr *S) {
-    return mergeNary(S, [](pw_aff lhs, pw_aff rhs) { return lhs * rhs; });
-  }
-
-  RetVal visitPtrToIntExpr(const llvm::SCEVPtrToIntExpr *S) {
-    return visit(S->getOperand());
-  }
-  RetVal visitTruncateExpr(const llvm::SCEVTruncateExpr *S) {
-    return visit(S->getOperand());
-  }
-  RetVal visitZeroExtendExpr(const llvm::SCEVZeroExtendExpr *S) {
-    return visit(S->getOperand());
-  }
-  RetVal visitSignExtendExpr(const llvm::SCEVSignExtendExpr *S) {
-    return visit(S->getOperand());
-  }
-  RetVal visitSMaxExpr(const llvm::SCEVSMaxExpr *S) {
-    return mergeNary(S, static_cast<Combinator>(max));
-  }
-  RetVal visitUMaxExpr(const llvm::SCEVUMaxExpr *S) {
-    return mergeNary(S, static_cast<Combinator>(max));
-  }
-  RetVal visitSMinExpr(const llvm::SCEVSMinExpr *S) {
-    return mergeNary(S, static_cast<Combinator>(min));
-  }
-  RetVal visitUMinExpr(const llvm::SCEVUMinExpr *S) {
-    return mergeNary(S, static_cast<Combinator>(min));
-  }
-
-  RetVal visitUDivExpr(const llvm::SCEVUDivExpr *S) {
-    // unsigned division
-    const auto dividend = S->getLHS();
-    const auto divisor = S->getRHS();
-
-    // divisor must be const to be affine
-    return visitDivision(dividend, divisor, S);
-  }
-  RetVal visitSDivInstruction(llvm::Instruction *SDiv, const llvm::SCEV *Expr) {
-    assert(SDiv->getOpcode() == llvm::Instruction::SDiv &&
-           "Assumed SDiv instruction!");
-
-    auto *Dividend = se.getSCEV(SDiv->getOperand(0));
-    auto *Divisor = se.getSCEV(SDiv->getOperand(1));
-    return visitDivision(Dividend, Divisor, Expr, SDiv);
-  }
-  RetVal visitDivision(const llvm::SCEV *dividend, const llvm::SCEV *divisor,
-                       const llvm::SCEV *S, llvm::Instruction *inst = nullptr) {
-    // todo
-    return llvm::None;
-  }
-
-  RetVal visitAddRecExpr(const llvm::SCEVAddRecExpr *S) {
-    const auto start = S->getStart();
-    const auto step = S->getStepRecurrence(se);
-    // llvm::dbgs() << *S << "\n";
-
-    if (start->isZero()) {
-      // todo
-      auto step = visit(S->getOperand(1));
-      if (!step)
-        return llvm::None;
-      // loop MUST exist
-      auto indvar = S->getLoop()->getInductionVariable(se);
-
-      if (!indvar)
-        return llvm::None;
-
-      // get loop index in context
-      auto pos = context.getIVarIndex(indvar);
-      assert(pos >= 0);
-
-      // llvm::dbgs() << space << "\n";
-      auto loop_expr = ISLPP_CHECK(sp.coeff<pw_aff>(dim::in, pos, 1));
-      // llvm::dbgs() << loop_expr << "\n";
-      // llvm::dbgs() << *step << "\n";
-      return ISLPP_CHECK(loop_expr * *step);
-    }
-
-    auto zero_start = se.getAddRecExpr(se.getConstant(start->getType(), 0),
-                                       S->getStepRecurrence(se), S->getLoop(),
-                                       S->getNoWrapFlags());
-
-    auto res_expr = visit(zero_start);
-    auto start_expr = visit(start);
-
-    if (res_expr && start_expr)
-      return ISLPP_CHECK(*res_expr + *start_expr);
-    else
-      return llvm::None;
-  }
-
-  RetVal visitSequentialUMinExpr(const llvm::SCEVSequentialUMinExpr *S) {
-    // todo
-    return llvm::None;
-  }
-  RetVal visitUnknown(const llvm::SCEVUnknown *S) {
-    const auto value = S->getValue();
-
-    if (auto instr = llvm::dyn_cast<llvm::Instruction>(S->getValue())) {
-      switch (instr->getOpcode()) {
-      case llvm::BinaryOperator::SRem:
-        return visitSRemInstruction(instr);
-      default:
-        break;
-      }
-    }
-
-    if (auto itr = context.constants.find(value);
-        itr != context.constants.end())
-      return ISLPP_CHECK(sp.constant<pw_aff>(itr->second));
-
-    if (context.parameters.contains(value)) {
-      auto name = value->getName();
-      auto param_sp = add_param(sp, name);
-      return ISLPP_CHECK(param_sp.coeff<pw_aff>(
-          dim::param, dims(param_sp, dim::param) - 1, 1));
-    }
-
-    if (int pos = context.getIVarIndex(value); pos != -1)
-      return ISLPP_CHECK(sp.coeff<pw_aff>(dim::in, pos, 1));
-
-    return llvm::None;
-  }
-  RetVal visitSRemInstruction(llvm::Instruction *instr) {
-    auto lhs = visit(se.getSCEV(instr->getOperand(0)));
-    auto rhs = visit(se.getSCEV(instr->getOperand(1)));
-    if (lhs && rhs)
-      return ISLPP_CHECK(*lhs % *rhs);
-    else
-      return llvm::None;
-  }
-
-  RetVal visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) {
-    // todo
-    return llvm::None;
-  }
-
-  RetVal mergeNary(const llvm::SCEVNAryExpr *S,
-                   std::invocable<pw_aff, pw_aff> auto &&fn) {
-    auto val = visit(S->getOperand(0));
-
-    if (val) {
-      for (int i = 1; i < S->getNumOperands(); ++i) {
-        auto inVal = visit(S->getOperand(i));
-        if (inVal)
-          val = ISLPP_CHECK(fn(std::move(*val), std::move(*inVal)));
-        else
-          return llvm::None;
-      }
-    }
-
-    return val;
-  }
-
-  using Base::visit;
-  RetVal visit(llvm::Value *val) { return visit(se.getSCEV(val)); }
-};
-
-struct ConditionalAffinator
-    : public ConditionalVisitor<ConditionalAffinator, set> {
-
-  ScevAffinator &affinator;
-  ConditionalAffinator(ScevAffinator &aff) : affinator{aff} {}
-
-  set visitAnd(llvm::Instruction &and_inst) override {
-    auto lhs = llvm::dyn_cast<llvm::Instruction>(and_inst.getOperand(0));
-    auto rhs = llvm::dyn_cast<llvm::Instruction>(and_inst.getOperand(1));
-    assert(lhs);
-    assert(rhs);
-    return ISLPP_CHECK(visit(*lhs) * visit(*rhs));
-  };
-
-  set visitOr(llvm::Instruction &or_inst) override {
-    auto lhs = llvm::dyn_cast<llvm::Instruction>(or_inst.getOperand(0));
-    auto rhs = llvm::dyn_cast<llvm::Instruction>(or_inst.getOperand(1));
-    assert(lhs);
-    assert(rhs);
-    return ISLPP_CHECK(visit(*lhs) + visit(*rhs));
-  };
-
-  set visitSelectInst(llvm::SelectInst &select) {
-    auto selector = visitValue(select.getOperand(0));
-    auto true_branch = visitValue(select.getOperand(1));
-    auto false_branch = visitValue(select.getOperand(2));
-
-    return selector * true_branch;
-  }
-
-  set visitICmpInst(llvm::ICmpInst &icmp) override {
-    auto lhs = icmp.getOperand(0);
-    auto rhs = icmp.getOperand(1);
-    assert(lhs);
-    assert(rhs);
-
-    auto lhscev = affinator.visit(lhs);
-    auto rhscev = affinator.visit(rhs);
-
-    if (lhscev && rhscev) {
-      ISLPP_CHECK(*lhscev);
-      ISLPP_CHECK(*rhscev);
-      switch (icmp.getPredicate()) {
-      case llvm::ICmpInst::Predicate::ICMP_EQ:
-        return ISLPP_CHECK(eq_set(*lhscev, *rhscev));
-      case llvm::ICmpInst::Predicate::ICMP_NE:
-        return ISLPP_CHECK(ne_set(*lhscev, *rhscev));
-      case llvm::ICmpInst::Predicate::ICMP_UGE:
-      case llvm::ICmpInst::Predicate::ICMP_SGE:
-        return ISLPP_CHECK(ge_set(*lhscev, *rhscev));
-      case llvm::ICmpInst::Predicate::ICMP_UGT:
-      case llvm::ICmpInst::Predicate::ICMP_SGT:
-        return ISLPP_CHECK(gt_set(*lhscev, *rhscev));
-      case llvm::ICmpInst::Predicate::ICMP_ULE:
-      case llvm::ICmpInst::Predicate::ICMP_SLE:
-        return ISLPP_CHECK(le_set(*lhscev, *rhscev));
-      case llvm::ICmpInst::Predicate::ICMP_ULT:
-      case llvm::ICmpInst::Predicate::ICMP_SLT:
-        return ISLPP_CHECK(lt_set(*lhscev, *rhscev));
-        break;
-      default:
-        break;
-      }
-    }
-
-    return nullSet();
-  }
-
-  set visitInstruction(llvm::Instruction &) { return nullSet(); };
-
-  set visitValue(llvm::Value *val) {
-    if (auto instr = llvm::dyn_cast<llvm::Instruction>(val))
-      return visit(instr);
-
-    if (auto constant = llvm::dyn_cast<llvm::Constant>(val)) {
-      assert(constant->getType()->getTypeID() == llvm::Type::IntegerTyID);
-      auto val = constant->getUniqueInteger();
-
-      if (val == 1)
-        return ISLPP_CHECK(set{affinator.sp.universe<set>()});
-      else
-        return nullSet();
-    }
-
-    return nullSet();
-  };
-
-  set nullSet() { return ISLPP_CHECK(affinator.sp.empty<set>()); }
-};
 
 pw_aff valuate(golly::InstantiationVariable::Expr expr,
                const AffineContext &context, llvm::ScalarEvolution &se,
@@ -347,9 +79,10 @@ struct PolyhedralBuilder {
   struct ThreadExpressions {
     map tau2cta;
     map tau2thread;
-    map thread2warpTuple;
+    map tau2warpTuple;
     map warpTuple2warp;
     map warpTuple2lane;
+    set globalThreadSet;
   };
 
   ThreadExpressions createThreadExpressions() {
@@ -359,9 +92,11 @@ struct PolyhedralBuilder {
     auto sp = get_space(spacify(global, se));
 
     // create cta getter
-    auto [tau2cta, tau2thread] = [&]() -> std::pair<multi_aff, multi_aff> {
+    auto [tau2cta, tau2thread,
+          allthread] = [&]() -> std::tuple<multi_aff, multi_aff, set> {
       auto cta_expr = null_tuple(sp);
       auto thd_expr = null_tuple(sp);
+      auto thd_set = set{"{ [] }"};
 
       int index = 0;
       for (auto &iv : global.induction_vars) {
@@ -369,14 +104,23 @@ struct PolyhedralBuilder {
           cta_expr = ISLPP_CHECK(flat_range_product(
               cta_expr, sp.coeff<multi_aff>(dim::in, index, 1)));
 
-        if (iv.kind == InstantiationVariable::Kind::Thread)
+        if (iv.kind == InstantiationVariable::Kind::Thread) {
           thd_expr = ISLPP_CHECK(flat_range_product(
               thd_expr, sp.coeff<multi_aff>(dim::in, index, 1)));
+          auto new_sp = get_space(set{"{ [i] }"});
+          auto id = ISLPP_CHECK(new_sp.coeff<aff>(dim::in, 0, 1));
+          auto lb = new_sp.zero<aff>();
+          assert(std::get_if<int>(&iv.upper_bound) &&
+                 "thread id upper bound should be fixed integer");
+          auto ub = new_sp.constant<aff>(std::get<int>(iv.upper_bound));
 
+          auto tid_set = le_set(lb, id) * lt_set(id, ub);
+          thd_set = flat_cross(std::move(thd_set), std::move(tid_set));
+        }
         ++index;
       }
 
-      return {cta_expr, thd_expr};
+      return {cta_expr, thd_expr, thd_set};
     }();
 
     auto [warptuple_expr, warp_expr,
@@ -384,14 +128,15 @@ struct PolyhedralBuilder {
       int index = 0;
       auto multiplier = 1;
 
-      auto expr = sp.zero<pw_aff>();
+      auto flat_thread_expr = sp.zero<pw_aff>();
 
       for (auto &iv : global.induction_vars) {
         if (iv.kind == InstantiationVariable::Kind::Thread) {
           // z * nx * ny + y * nx + x
 
-          expr = expr + (sp.coeff<pw_aff>(dim::in, index, 1) *
-                         sp.constant<pw_aff>(multiplier));
+          flat_thread_expr =
+              flat_thread_expr + (sp.coeff<pw_aff>(dim::in, index, 1) *
+                                  sp.constant<pw_aff>(multiplier));
 
           if (iv.dim)
             multiplier = multiplier * cuda.getDimCounts().at(*iv.dim);
@@ -402,8 +147,8 @@ struct PolyhedralBuilder {
 
       auto warp_size = sp.constant<pw_aff>(32);
 
-      auto warp_getter = expr / warp_size;
-      auto lane_getter = expr % warp_size;
+      auto warp_getter = flat_thread_expr / warp_size;
+      auto lane_getter = flat_thread_expr % warp_size;
 
       auto warp_map = map(warp_getter);
       auto lane_map = map(lane_getter);
@@ -415,11 +160,14 @@ struct PolyhedralBuilder {
               apply_range(reverse(warp_tuple), lane_map)};
     }();
 
-    return ThreadExpressions{.tau2cta = map{tau2cta},
-                             .tau2thread = map{tau2thread},
-                             .thread2warpTuple = warptuple_expr,
-                             .warpTuple2warp = warp_expr,
-                             .warpTuple2lane = lane_expr};
+    return ThreadExpressions{
+        .tau2cta = map{tau2cta},
+        .tau2thread = map{tau2thread},
+        .tau2warpTuple = warptuple_expr,
+        .warpTuple2warp = warp_expr,
+        .warpTuple2lane = lane_expr,
+        .globalThreadSet = allthread,
+    };
   }
 
   union_map constructDomain() {
@@ -459,7 +207,6 @@ struct PolyhedralBuilder {
         static int counter = 0;
         auto param = add_param(space, llvm::formatv("b{0}", counter++).str());
         auto param_count = dims(param, dim::param);
-        // llvm::dbgs() << "param name: " << param << "\n";
         auto val = param.coeff<pw_aff>(dim::param, param_count - 1, 1);
 
         auto zero = param.constant<pw_aff>(0);
@@ -605,80 +352,125 @@ struct PolyhedralBuilder {
   }
 
   union_map constructValidBarriers(const ThreadExpressions &thread_exprs,
-                                   union_map domain, union_map thread_alloc,
+                                   union_map stmt_domain,
+                                   union_map thread_alloc,
                                    union_map temporal_schedule) {
     // [S->T] -> Stmt
     union_map beta{"{}"};
 
-    union_map rev_alloc = reverse(thread_alloc);
-    scc.traverse(
-        [&](const llvm::BasicBlock *bb) {
-          for (auto &stmt : stmts.iterateStatements(*bb)) {
-            if (auto bar_stmt = stmt.as<golly::BarrierStatement>()) {
-              union_set s{name(set{"{[]}"}, bar_stmt->getName())};
-              auto stmt_instances = apply(s, domain);
-              auto tid_to_insts = range_intersect(rev_alloc, stmt_instances);
+    scc.traverse([&](const llvm::BasicBlock *bb) {
+      for (auto &stmt : stmts.iterateStatements(*bb)) {
+        if (auto bar_stmt = stmt.as<golly::BarrierStatement>()) {
+          // llvm::dbgs() << "HEY\n";
+          // use time as a measure of barrier instances
+          // time -> tau
 
-              auto &barrier = bar_stmt->getBarrier();
-              const auto active_threads = apply(stmt_instances, thread_alloc);
+          union_set s{name(set{"{[]}"}, bar_stmt->getName())};
+          auto stmt_instances = apply(s, stmt_domain);
 
-              if (is_empty(active_threads)) {
-                llvm::outs()
-                    << "warning: unreachable barrier\n"
-                    << *bar_stmt->getDefiningInstruction().getDebugLoc().get()
-                    << "\n";
+          // llvm::dbgs() << "insts: " << stmt_instances << "\n";
+
+          if (is_empty(stmt_instances)) {
+            llvm::outs()
+                << "warning: unreachable barrier\n"
+                << *bar_stmt->getDefiningInstruction().getDebugLoc().get()
+                << "\n";
+            continue;
+          }
+          auto time_map =
+              apply_range(identity(stmt_instances), temporal_schedule);
+
+          const auto tau_map =
+              apply_range(identity(stmt_instances), thread_alloc);
+
+          // b -> tau
+          auto beta_tau = apply_range(reverse(time_map), tau_map);
+          auto same_tau = wrap(identity(range(tau_map)));
+
+          // b -> [tau -> tau]
+          auto beta_tau_pairs =
+              range_subtract(range_product(beta_tau, beta_tau),
+                             wrap(identity(range(beta_tau))));
+
+          auto &barrier = bar_stmt->getBarrier();
+          if (auto warp_bar =
+                  std::get_if<golly::BarrierStatement::Warp>(&barrier)) {
+            // collect all warps in this statement
+
+            auto tau2warp = ISLPP_CHECK(apply_range(
+                thread_exprs.tau2warpTuple, thread_exprs.warpTuple2warp));
+            auto warps = range_product(
+                apply_range(beta_tau, union_map{thread_exprs.tau2cta}),
+                apply_range(beta_tau, union_map{tau2warp}));
+
+            llvm::dbgs() << "warps: " << warps << "\n";
+
+            // convert the mask to a set
+            warp_bar->mask;
+            llvm::dbgs() << "mask: " << *warp_bar->mask << "\n";
+
+            // generate all expected warps
+          }
+
+          if (auto block_bar =
+                  std::get_if<golly::BarrierStatement::Block>(&barrier)) {
+            // check for barrier divergence
+
+            // collect all ctas in this statement
+            auto ctas = apply_range(beta_tau, union_map{thread_exprs.tau2cta});
+
+            // generate all expected threads
+            {
+              auto waiting_taus = flat_range_product(
+                  ctas, universal(domain(ctas),
+                                  union_set{thread_exprs.globalThreadSet}));
+              llvm::dbgs() << "\nwaiting: " << waiting_taus << "\n";
+              llvm::dbgs() << "active: " << beta_tau << "\n";
+              if ((waiting_taus == beta_tau) == isl_bool::isl_bool_false) {
+                // barrier divergence
+                llvm::errs() << "bdiv!!\n";
                 continue;
               }
-
-              const auto thread_pairs =
-                  universal(active_threads, active_threads) -
-                  identity(active_threads);
-
-              if (auto warp_bar =
-                      std::get_if<golly::BarrierStatement::Warp>(&barrier)) {
-                // collect all warps in this statement
-
-                // convert the mask to a set
-                warp_bar->mask;
-
-                // collect all expected warps
-              }
-
-              if (auto block_bar =
-                      std::get_if<golly::BarrierStatement::Block>(&barrier)) {
-                // check for barrier divergence
-                {
-                  // collect all ctas in this statement
-                  auto ctas =
-                      apply(active_threads, union_map{thread_exprs.tau2cta});
-
-                  // generate all expected threads
-                }
-
-                // otherwise, perform a simple operation to determine which
-                // domains synchronize inst -> tid
-                auto dmn_insts =
-                    apply_range(domain_map(thread_pairs), tid_to_insts) +
-                    apply_range(range_map(thread_pairs), tid_to_insts);
-
-                // filter to same gids
-                auto same_ctaid =
-                    apply_range(union_map{thread_exprs.tau2cta},
-                                reverse(union_map{thread_exprs.tau2cta}));
-
-                beta = beta + domain_intersect(dmn_insts, wrap(same_ctaid));
-              }
-
-              if (auto global_bar =
-                      std::get_if<golly::BarrierStatement::End>(&barrier)) {
-                auto dmn_insts =
-                    apply_range(domain_map(thread_pairs), tid_to_insts) +
-                    apply_range(range_map(thread_pairs), tid_to_insts);
-                beta = beta + coalesce(dmn_insts);
-              }
             }
+
+            // map statement instances to ctas
+            const auto inst_to_cta =
+                apply_range(tau_map, union_map{thread_exprs.tau2cta});
+
+            const auto same_cta =
+                apply_range(inst_to_cta, reverse(inst_to_cta));
+            const auto same_time = apply_range(time_map, reverse(time_map));
+
+            // SInst -> TInst
+            auto syncing_stmts = same_cta * same_time;
+
+            auto inst_to_S = apply_range(domain_map(syncing_stmts), tau_map);
+            auto inst_to_T = apply_range(range_map(syncing_stmts), tau_map);
+
+            beta = beta +
+                   domain_subtract(domain_factor_range(reverse(
+                                       range_product(inst_to_S, inst_to_T))),
+                                   same_tau);
           }
-        });
+
+          if (auto global_bar =
+                  std::get_if<golly::BarrierStatement::End>(&barrier)) {
+            auto tid_to_insts =
+                range_intersect(reverse(thread_alloc), stmt_instances);
+            const auto active_threads = range(thread_alloc);
+            const auto thread_pairs =
+                universal(active_threads, active_threads) -
+                identity(active_threads);
+            auto dmn_insts =
+                apply_range(domain_map(thread_pairs), tid_to_insts) +
+                apply_range(range_map(thread_pairs), tid_to_insts);
+            beta = beta + dmn_insts;
+          }
+        }
+      }
+    });
+
+    // llvm::dbgs() << "beta: " << beta << "\n";
     return coalesce(beta);
   }
 
