@@ -31,7 +31,7 @@ def compile(
             "--cuda-gpu-arch=sm_60",
             "-Xclang",
             "-disable-O0-optnone",
-            # "-DPOLYBENCH_USE_SCALAR_LB",
+            "-DPOLYBENCH_USE_SCALAR_LB",
             filename.resolve(),
         ]
         + ["" if showWarnings else "-w"]
@@ -71,7 +71,7 @@ def analyze(file: path.Path, patchFile: path.Path, config: path.Path, verbose: b
     sp.run(cmd)
 
 
-def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, config: path.Path, verbose, **kwargs):
+def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, verbose,  config: path.Path = None, **kwargs):
     file = filename
     if file.suffix == ".cu":
         # compile and canonicalize
