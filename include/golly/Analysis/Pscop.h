@@ -1,6 +1,7 @@
-#ifndef ANALYSIS_PSCOP_H
-#define ANALYSIS_PSCOP_H
+#ifndef GOLLY_ANALYSIS_PSCOP_H
+#define GOLLY_ANALYSIS_PSCOP_H
 
+#include "golly/Analysis/Error.h"
 #include "golly/Support/isl.h"
 #include <llvm/Support/raw_ostream.h>
 
@@ -44,4 +45,4 @@ struct Pscop {
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Pscop &);
 } // namespace golly
 
-#endif /* ANALYSIS_PSCOP_H */
+#endif /* GOLLY_ANALYSIS_PSCOP_H */

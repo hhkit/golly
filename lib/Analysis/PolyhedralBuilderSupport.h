@@ -7,6 +7,7 @@
 #include <llvm/ADT/Optional.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
+#include <llvm/Support/FormatVariadic.h>
 
 namespace golly {
 
@@ -216,7 +217,7 @@ struct ConditionalAffinator
     auto true_branch = visitValue(select.getOperand(1));
     auto false_branch = visitValue(select.getOperand(2));
 
-    return selector * true_branch;
+    return selector * true_branch + (false_branch - selector);
   }
 
   set visitICmpInst(llvm::ICmpInst &icmp) override {
@@ -279,6 +280,29 @@ struct ConditionalAffinator
   set nullSet() { return ISLPP_CHECK(affinator.sp.empty<set>()); }
 };
 
+struct MaskAffinator {
+  using RetVal = set;
+
+  RetVal visitConstant(const llvm::Constant *c) {
+    auto mask = c->getUniqueInteger().getZExtValue();
+    auto ret = set{"{[i] | 0 <= i < 32}"};
+
+    for (unsigned i = 0; i < 32; ++i) {
+      // if bit is not set
+      if ((mask & (1 << i)) == 0)
+        ret = ret - set{llvm::formatv("{{ [{0}] }", i).str()};
+    }
+
+    return ret;
+  }
+
+  RetVal visitValue(const llvm::Value *val) {
+    if (auto as_const = llvm::dyn_cast<llvm::Constant>(val))
+      return visitConstant(as_const);
+
+    return {"{}"};
+  }
+};
 } // namespace golly
 
 #endif /* ANALYSIS_POLYHEDRALBUILDERSUPPORT_H */

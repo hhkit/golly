@@ -919,6 +919,16 @@ public:
   string str();
 };
 
+template <typename Obj, typename HeadFn, typename... Funcs>
+Obj chain_apply_range(Obj s, HeadFn fn, Funcs... rest) {
+  return chain_apply_range(Obj{apply_range(s, fn)}, rest...);
+}
+
+template <typename Obj, typename HeadFn>
+Obj chain_apply_range(Obj s, HeadFn fn) {
+  return apply_range(s, fn);
+}
+
 } // namespace islpp
 
 #endif /* GOLLY_SUPPORT_ISL_H */

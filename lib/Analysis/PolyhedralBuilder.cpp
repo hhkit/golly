@@ -399,17 +399,74 @@ struct PolyhedralBuilder {
 
             auto tau2warp = ISLPP_CHECK(apply_range(
                 thread_exprs.tau2warpTuple, thread_exprs.warpTuple2warp));
-            auto warps = range_product(
+            auto tau2lane = ISLPP_CHECK(apply_range(
+                thread_exprs.tau2warpTuple, thread_exprs.warpTuple2lane));
+
+            auto beta_warps = range_product(
                 apply_range(beta_tau, union_map{thread_exprs.tau2cta}),
                 apply_range(beta_tau, union_map{tau2warp}));
-
-            llvm::dbgs() << "warps: " << warps << "\n";
+            auto beta_lanes = apply_range(beta_tau, union_map{tau2lane});
 
             // convert the mask to a set
-            warp_bar->mask;
-            llvm::dbgs() << "mask: " << *warp_bar->mask << "\n";
+            auto s = MaskAffinator{}.visitValue(warp_bar->mask);
 
+            auto waiting_beta_lanes =
+                universal(domain(beta_warps), union_set(s));
             // generate all expected warps
+            auto waiting_warplanes =
+                range_product(beta_warps, waiting_beta_lanes);
+            auto active_warplanes =
+                coalesce(range_product(beta_warps, beta_lanes));
+
+            // llvm::dbgs() << "waiting: " << waiting_warplanes << "\n";
+            // llvm::dbgs() << "active: " << active_warplanes << "\n";
+
+            if ((waiting_warplanes > active_warplanes) ==
+                isl_bool::isl_bool_true) {
+              llvm::dbgs() << "warp-level bdiv!\n";
+              continue;
+            }
+
+            // synchronize the waiting warplanes
+            // right now, waiting_warplanes is:
+            // beta -> [ [cta -> w] -> l ]
+            // we need to isolate [cta->w], and also recover [w->l] to recover
+            // the thread
+
+            const auto inst_to_cta =
+                apply_range(tau_map, union_map{thread_exprs.tau2cta});
+            const auto same_cta =
+                apply_range(inst_to_cta, reverse(inst_to_cta));
+
+            const auto inst_to_warp = chain_apply_range(
+                tau_map, union_map{thread_exprs.tau2warpTuple},
+                union_map{thread_exprs.warpTuple2warp});
+            const auto same_warp =
+                apply_range(inst_to_warp, reverse(inst_to_warp));
+
+            const auto same_time = apply_range(time_map, reverse(time_map));
+
+            const auto in_waiting_lane = range_intersect(
+                chain_apply_range(tau_map,
+                                  union_map{thread_exprs.tau2warpTuple},
+                                  union_map{thread_exprs.warpTuple2lane}),
+                union_set{s});
+
+            auto syncing_stmts =
+                same_cta * same_warp * same_time *
+                universal(domain(in_waiting_lane), domain(in_waiting_lane));
+
+            auto inst_to_S = apply_range(domain_map(syncing_stmts), tau_map);
+            auto inst_to_T = apply_range(range_map(syncing_stmts), tau_map);
+
+            auto tmp =
+                domain_subtract(domain_factor_range(reverse(
+                                    range_product(inst_to_S, inst_to_T))),
+                                same_tau);
+            beta = beta +
+                   domain_subtract(domain_factor_range(reverse(
+                                       range_product(inst_to_S, inst_to_T))),
+                                   same_tau);
           }
 
           if (auto block_bar =
@@ -424,8 +481,8 @@ struct PolyhedralBuilder {
               auto waiting_taus = flat_range_product(
                   ctas, universal(domain(ctas),
                                   union_set{thread_exprs.globalThreadSet}));
-              llvm::dbgs() << "\nwaiting: " << waiting_taus << "\n";
-              llvm::dbgs() << "active: " << beta_tau << "\n";
+              // llvm::dbgs() << "\nwaiting: " << waiting_taus << "\n";
+              // llvm::dbgs() << "active: " << beta_tau << "\n";
               if ((waiting_taus == beta_tau) == isl_bool::isl_bool_false) {
                 // barrier divergence
                 llvm::errs() << "bdiv!!\n";
@@ -481,7 +538,8 @@ struct PolyhedralBuilder {
     auto beta = constructValidBarriers(thd_exprs, domain, thread_allocation,
                                        temporal_schedule);
 
-    auto tid_to_stmt_inst = reverse(thread_allocation);
+    auto tid_to_stmt_inst =
+        reverse(domain_intersect(thread_allocation, range(domain)));
 
     // enumerate all thread pairs
     auto threads = range(thread_allocation);

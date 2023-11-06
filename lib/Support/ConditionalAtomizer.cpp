@@ -9,6 +9,7 @@ void collect(llvm::Instruction *instr, llvm::SetVector<llvm::Value *> &set) {
   switch (instr->getOpcode()) {
   case llvm::BinaryOperator::And:
   case llvm::BinaryOperator::Or:
+  case llvm::BinaryOperator::Select:
     collect(llvm::dyn_cast<llvm::Instruction>(instr->getOperand(0)), set);
     collect(llvm::dyn_cast<llvm::Instruction>(instr->getOperand(1)), set);
     return;
