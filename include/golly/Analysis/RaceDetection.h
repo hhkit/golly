@@ -1,5 +1,6 @@
 #ifndef GOLLY_ANALYSIS_RACEDETECTION_H
 #define GOLLY_ANALYSIS_RACEDETECTION_H
+#include "golly/ErrorHandling/Error.h"
 #include <llvm/IR/PassManager.h>
 
 namespace golly {
@@ -8,11 +9,9 @@ using llvm::AnalysisKey;
 using llvm::Function;
 using llvm::FunctionAnalysisManager;
 
-struct Races {};
-
 class RaceDetector : public AnalysisInfoMixin<RaceDetector> {
 public:
-  using Result = Races;
+  using Result = ErrorList;
   static AnalysisKey Key;
 
   Result run(Function &f, FunctionAnalysisManager &fam);

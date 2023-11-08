@@ -146,10 +146,12 @@ struct ScevAffinator
       return ISLPP_CHECK(sp.constant<pw_aff>(itr->second));
 
     if (context.parameters.contains(value)) {
-      auto name = value->getName();
-      auto param_sp = add_param(sp, name);
-      return ISLPP_CHECK(param_sp.coeff<pw_aff>(
-          dim::param, dims(param_sp, dim::param) - 1, 1));
+      if (!value->getType()->isPointerTy()) {
+        auto name = value->getName();
+        auto param_sp = add_param(sp, name);
+        return ISLPP_CHECK(param_sp.coeff<pw_aff>(
+            dim::param, dims(param_sp, dim::param) - 1, 1));
+      }
     }
 
     if (int pos = context.getIVarIndex(value); pos != -1)
@@ -163,8 +165,10 @@ struct ScevAffinator
         return ISLPP_CHECK(sp.zero<pw_aff>());
 
       // if it is a pointer we are casting around
-      auto use = value->getSingleUndroppableUse();
-      if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastOperator>(use))
+      if (auto use = value->getSingleUndroppableUse())
+        if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastOperator>(use))
+          return visit(se.getSCEV(op->getOperand(0)));
+      if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastInst>(value))
         return visit(se.getSCEV(op->getOperand(0)));
     }
 
@@ -258,10 +262,12 @@ struct PtrAffinator
         return val;
     }
 
-    auto use = val->getSingleUndroppableUse();
-    assert(use);
-    if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastOperator>(use))
+    if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastInst>(val))
       return visit(se.getSCEV(op->getOperand(0)));
+    if (auto use = val->getSingleUndroppableUse()) {
+      if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastOperator>(use))
+        return visit(se.getSCEV(op->getOperand(0)));
+    }
 
     return llvm::None;
   }

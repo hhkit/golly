@@ -8,7 +8,7 @@
 namespace golly {
 
 struct dim3 {
-  Optional<int> x, y, z;
+  llvm::Optional<int> x, y, z;
 
   explicit operator bool() const { return x || y || z; }
 };
@@ -19,6 +19,8 @@ struct GollyOptions {
   };
 
   llvm::StringMap<Params> function_parameters;
+
+  llvm::Optional<std::string> errorLog;
 };
 
 llvm::Expected<GollyOptions> parseOptions(llvm::StringRef name);

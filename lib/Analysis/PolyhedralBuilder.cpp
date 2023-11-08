@@ -78,15 +78,6 @@ struct PolyhedralBuilder {
   llvm::ScalarEvolution &se;
   llvm::LoopInfo &li;
 
-  struct ThreadExpressions {
-    map tau2cta;
-    map tau2thread;
-    map tau2warpTuple;
-    map warpTuple2warp;
-    map warpTuple2lane;
-    set globalThreadSet;
-  };
-
   ThreadExpressions createThreadExpressions() {
     const auto &global = detection.getGlobalContext();
 
@@ -353,12 +344,13 @@ struct PolyhedralBuilder {
     return ret;
   }
 
-  union_map constructValidBarriers(const ThreadExpressions &thread_exprs,
-                                   union_map stmt_domain,
-                                   union_map thread_alloc,
-                                   union_map temporal_schedule) {
+  std::pair<union_map, ErrorList>
+  constructValidBarriers(const ThreadExpressions &thread_exprs,
+                         union_map stmt_domain, union_map thread_alloc,
+                         union_map temporal_schedule) {
     // [S->T] -> Stmt
     union_map beta{"{}"};
+    ErrorList errs;
 
     scc.traverse([&](const llvm::BasicBlock *bb) {
       for (auto &stmt : stmts.iterateStatements(*bb)) {
@@ -423,9 +415,11 @@ struct PolyhedralBuilder {
             // llvm::dbgs() << "waiting: " << waiting_warplanes << "\n";
             // llvm::dbgs() << "active: " << active_warplanes << "\n";
 
-            if ((waiting_warplanes > active_warplanes) ==
-                isl_bool::isl_bool_true) {
-              llvm::dbgs() << "warp-level bdiv!\n";
+            if ((waiting_warplanes > active_warplanes)) {
+              errs.emplace_back(BarrierDivergence{
+                  .barrier = bar_stmt,
+                  .level = Level::Warp,
+              });
               continue;
             }
 
@@ -485,9 +479,11 @@ struct PolyhedralBuilder {
                                   union_set{thread_exprs.globalThreadSet}));
               // llvm::dbgs() << "\nwaiting: " << waiting_taus << "\n";
               // llvm::dbgs() << "active: " << beta_tau << "\n";
-              if ((waiting_taus == beta_tau) == isl_bool::isl_bool_false) {
-                // barrier divergence
-                llvm::errs() << "bdiv!!\n";
+              if ((waiting_taus != beta_tau)) {
+                errs.emplace_back(BarrierDivergence{
+                    .barrier = bar_stmt,
+                    .level = Level::Block,
+                });
                 continue;
               }
             }
@@ -530,15 +526,14 @@ struct PolyhedralBuilder {
     });
 
     // llvm::dbgs() << "beta: " << beta << "\n";
-    return coalesce(beta);
+    return {coalesce(beta), errs};
   }
 
-  union_map constructSynchronizationSchedule(const ThreadExpressions &thd_exprs,
-                                             union_map domain,
-                                             union_map thread_allocation,
-                                             union_map temporal_schedule) {
-    auto beta = constructValidBarriers(thd_exprs, domain, thread_allocation,
-                                       temporal_schedule);
+  std::pair<union_map, ErrorList> constructSynchronizationSchedule(
+      const ThreadExpressions &thd_exprs, union_map domain,
+      union_map thread_allocation, union_map temporal_schedule) {
+    auto [beta, errs] = constructValidBarriers(
+        thd_exprs, domain, thread_allocation, temporal_schedule);
 
     auto tid_to_stmt_inst =
         reverse(domain_intersect(thread_allocation, range(domain)));
@@ -581,7 +576,7 @@ struct PolyhedralBuilder {
     auto sync_times = lexmin(
         apply_range(range_factor_range(barrs_over_stmts), temporal_schedule));
 
-    return sync_times;
+    return {sync_times, errs};
   }
 
   std::pair<union_map, union_map> calculateAccessRelations(union_map domain) {
@@ -620,9 +615,8 @@ struct PolyhedralBuilder {
           if (!(ptr && scev))
             continue;
 
-          auto ptr_name = llvm::demangle((*ptr)->getName().str());
-
-          auto name_expr = [&](auto expr) -> map {
+          auto name_expr = [&, ptr_name = llvm::demangle(
+                                   (*ptr)->getName().str())](auto expr) -> map {
             return name(name(map{expr}, dim::out, ptr_name), dim::in,
                         stmt.getName());
           };
@@ -664,7 +658,7 @@ Pscop PolyhedralBuilderPass::run(llvm::Function &f,
   const auto domain = builder.constructDomain();
   const auto thread_alloc = builder.constructDistribution(domain);
   const auto temporal_schedule = builder.constructTemporalSchedule(domain);
-  const auto sync_schedule = builder.constructSynchronizationSchedule(
+  const auto [sync_schedule, errors] = builder.constructSynchronizationSchedule(
       exprs, domain, thread_alloc, temporal_schedule);
   const auto [reads, writes] = builder.calculateAccessRelations(domain);
 
@@ -675,6 +669,9 @@ Pscop PolyhedralBuilderPass::run(llvm::Function &f,
       .sync_schedule = sync_schedule,
       .write_access_relation = writes,
       .read_access_relation = reads,
+
+      .thread_expressions = exprs,
+      .errors = errors,
   };
 }
 } // namespace golly

@@ -11,6 +11,8 @@ add_llvm_pass_plugin(golly MODULE
     Analysis/SccOrdering.cpp
     Analysis/StatementDetection.cpp
     Analysis/Statements.cpp
+    ErrorHandling/Error.cpp
+    ErrorHandling/YamlDumper.cpp
     Support/ConditionalAtomizer.cpp
     Support/GollyOptions.cpp
     Support/isl.cpp

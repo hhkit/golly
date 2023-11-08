@@ -58,15 +58,22 @@ def canonicalize(outfile: io.TextIOWrapper, workdir: path.Path):
 
 
 def analyze(file: path.Path, patchFile: path.Path, config: path.Path, verbose: bool):
+    options = {}
+    if config is not None: options["config"] = config 
+    if patchFile is not None: options["outfile"] = patchFile
+
+    optionStr = f"<{';'.join(f'{k}={v}' for k,v in options.items())}>"  if len(options) > 0 else ""
+
     cmd = [
             "opt",
             "-load",
             f"{golly_path}",
             f"--load-pass-plugin={golly_path}",
-            "--passes=golly" + (f"<config={config}>" if config is not None else ""),
+            "--passes=golly" + optionStr,
             "--disable-output",
             file.resolve(),
-        ] + (["--golly-verbose"] if verbose else []) + ([f"--golly-out={patchFile}" if patchFile is not None else []])
+        ] + (["--golly-verbose"] if verbose else []) 
+    # + ([f"--golly-out={patchFile}" if patchFile is not None else []])
     print("command: " + " ".join(map(str, cmd)))
     sp.run(cmd)
 

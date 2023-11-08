@@ -6,15 +6,22 @@
 #include "golly/Analysis/RaceDetection.h"
 #include "golly/Analysis/SccOrdering.h"
 #include "golly/Analysis/StatementDetection.h"
+#include "golly/ErrorHandling/YamlDumper.h"
 #include "golly/Support/GollyOptions.h"
 
 #include <llvm/Analysis/RegionInfo.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
+#include <llvm/Support/WithColor.h>
 #include <llvm/Transforms/Scalar/LoopRotation.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 
 namespace golly {
+static std::string symbolOnly(std::string_view str) {
+  auto pos = str.find_first_of("(");
+  return std::string(str.substr(0, pos));
+}
 namespace detail {
 
 static bool checkParametrizedPassName(llvm::StringRef Name,
@@ -63,8 +70,29 @@ PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
   if (f.getName() == "_Z10__syncwarpj") {
     return PreservedAnalyses::none();
   }
-  fam.getResult<golly::RaceDetector>(f);
-  // llvm::outs() < < < < "\n";
+
+  auto params = fam.getResult<golly::CudaParameterDetection>(f);
+
+  llvm::outs() << "Race detection of ";
+  llvm::WithColor(llvm::outs(), llvm::HighlightColor::Address)
+      << symbolOnly(llvm::demangle(f.getName().str()));
+  llvm::outs() << " using " << params << ": ";
+
+  if (auto errs = fam.getResult<golly::RaceDetector>(f)) {
+    if (options->errorLog) {
+      dumpYaml(errs, *options->errorLog);
+    } else {
+      llvm::outs() << "\n";
+      for (auto &elem : errs) {
+        llvm::WithColor(llvm::outs(), llvm::raw_ostream::RED, true)
+            << "ERROR: ";
+        elem.print(
+            llvm::WithColor(llvm::outs(), llvm::HighlightColor::Warning));
+        llvm::outs() << " detected\n";
+      }
+    }
+  } else
+    llvm::WithColor(llvm::outs(), llvm::raw_ostream::GREEN, true) << "Clear!\n";
   return PreservedAnalyses::all();
 }
 } // namespace golly

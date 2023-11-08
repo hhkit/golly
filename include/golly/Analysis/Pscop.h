@@ -1,11 +1,20 @@
 #ifndef GOLLY_ANALYSIS_PSCOP_H
 #define GOLLY_ANALYSIS_PSCOP_H
 
-#include "golly/Analysis/Error.h"
+#include "golly/ErrorHandling/Error.h"
 #include "golly/Support/isl.h"
 #include <llvm/Support/raw_ostream.h>
 
 namespace golly {
+
+struct ThreadExpressions {
+  islpp::map tau2cta;
+  islpp::map tau2thread;
+  islpp::map tau2warpTuple;
+  islpp::map warpTuple2warp;
+  islpp::map warpTuple2lane;
+  islpp::set globalThreadSet;
+};
 /*
 
 Synchronization can only be determined between two threads. A single thread is
@@ -40,6 +49,9 @@ struct Pscop {
   islpp::union_map read_access_relation;  // param -> { StmtInst -> Access }
 
   // dependence relation irrelevant for race detection
+
+  ThreadExpressions thread_expressions;
+  ErrorList errors;
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Pscop &);

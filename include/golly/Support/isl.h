@@ -159,6 +159,9 @@ struct space_config {
   CLOSED_BINOP(TYPE, operator-, isl_##TYPE##_subtract);                        \
   CLOSED_BINOP(TYPE, operator+, isl_##TYPE##_union);                           \
   BIN_PROP(TYPE, operator==, isl_##TYPE##_is_equal);                           \
+  inline auto operator!=(const TYPE &lhs, const TYPE &rhs) {                   \
+    return !(lhs == rhs);                                                      \
+  }                                                                            \
   BIN_PROP(TYPE, operator<=, isl_##TYPE##_is_subset);                          \
   REV_BINOP(TYPE, operator>=, operator<=);                                     \
   BIN_PROP(TYPE, operator<, isl_##TYPE##_is_strict_subset);                    \

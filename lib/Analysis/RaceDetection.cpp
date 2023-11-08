@@ -1,36 +1,26 @@
 #include "golly/Analysis/RaceDetection.h"
+#include "golly/ADT/PairSet.h"
 #include "golly/Analysis/CudaParameterDetection.h"
 #include "golly/Analysis/PolyhedralBuilder.h"
 #include "golly/Analysis/StatementDetection.h"
 #include "golly/Support/isl_llvm.h"
 #include <filesystem>
 #include <fmt/format.h>
-#include <fstream>
-#include <llvm/Demangle/Demangle.h>
-#include <llvm/IR/DebugInfo.h>
-#include <llvm/Support/WithColor.h>
+
+#include <llvm/Support/CommandLine.h>
 
 llvm::cl::opt<bool> golly_verbose("golly-verbose",
                                   llvm::cl::desc("verbose output"));
 
-llvm::cl::opt<std::string> out_file("golly-out", llvm::cl::desc("output file"));
-
 namespace golly {
 AnalysisKey RaceDetector::Key;
 
-static std::string symbolOnly(std::string_view str) {
-  auto pos = str.find_first_of("(");
-  return std::string(str.substr(0, pos));
-}
-
-Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
-  const auto &params = fam.getResult<golly::CudaParameterDetection>(f);
-  llvm::outs() << "Race detection of ";
-  llvm::WithColor(llvm::outs(), llvm::raw_ostream::MAGENTA, true, false)
-      << symbolOnly(llvm::demangle(f.getName().str()));
-  llvm::outs() << " using " << params << ": ";
+ErrorList RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
 
   const auto &pscop = fam.getResult<golly::PolyhedralBuilderPass>(f);
+  if (pscop.errors)
+    return pscop.errors;
+
   if (golly_verbose)
     llvm::dbgs() << pscop << "\n";
 
@@ -105,58 +95,65 @@ Races RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
     auto conflicting_statements =
         unwrap(range(unwrap(domain(conflicting_syncs))));
 
-    auto fstream = std::ofstream(out_file);
+    ErrorList errs;
+
+    PairSet<const Statement *, const Statement *> stmt_pairs;
+    auto get_cta =
+        apply_range(pscop.thread_allocation,
+                    islpp::union_map(pscop.thread_expressions.tau2cta));
+    auto same_cta = apply_range(get_cta, reverse(get_cta));
+    auto get_warp = chain_apply_range(
+        pscop.thread_allocation,
+        islpp::union_map(pscop.thread_expressions.tau2warpTuple),
+        islpp::union_map(pscop.thread_expressions.warpTuple2warp));
+    auto same_warp = apply_range(get_warp, reverse(get_warp));
 
     for_each(conflicting_statements, [&](const islpp::map &sampl) {
-      auto write_name = islpp::name(sampl, islpp::dim::in);
+      auto write_stmt =
+          stmt_info.getStatement(islpp::name(sampl, islpp::dim::in));
+      auto read_stmt =
+          stmt_info.getStatement(islpp::name(sampl, islpp::dim::out));
 
-      auto write_stmt = stmt_info.getStatement(write_name);
-      auto read_name = islpp::name(sampl, islpp::dim::out);
-      auto read_stmt = stmt_info.getStatement(read_name);
+      // don't revisit the same pair
+      {
+        auto pair = write_stmt < read_stmt ? std::pair{write_stmt, read_stmt}
+                                           : std::pair{read_stmt, write_stmt};
+        if (stmt_pairs.contains(pair))
+          return;
+        stmt_pairs.insert(pair);
+      }
 
       assert(write_stmt && read_stmt &&
              "these statements should definitely exist");
+      Level conflict_level = Level::Grid;
+      {
+        // check if filtering out same block statements removes conflicts
+        {
+          if (is_empty(islpp::union_map{sampl} - same_cta)) {
+            conflict_level = Level::Block;
+
+            // we now know all conflicts are block-level
+            // check if filtering out same warp statements removes conflicts
+            {
+              if (is_empty(islpp::union_map{sampl} - same_warp))
+                conflict_level = Level::Warp;
+            }
+          }
+        }
+      }
 
       auto clashing_tids = apply_range(
           apply_domain(islpp::union_map{sampl}, pscop.thread_allocation),
           pscop.thread_allocation);
       auto single_pair = clean(sample(clashing_tids));
 
-      {
-        namespace fs = std::filesystem;
-        auto &write_dbg_loc =
-            *write_stmt->getDefiningInstruction().getDebugLoc().get();
-
-        auto &acc_dbg_loc =
-            *read_stmt->getDefiningInstruction().getDebugLoc().get();
-
-        constexpr auto caret_loc = [](const llvm::DILocation &dbg) -> string {
-          constexpr auto canonicalize =
-              [](const llvm::DILocation &dbg) -> fs::path {
-            return fs::canonical(fs::path{dbg.getDirectory().str()} /
-                                 fs::path{dbg.getFilename().str()});
-          };
-          return fmt::format("{}:{}:{}", canonicalize(dbg).string(),
-                             dbg.getLine(), dbg.getColumn());
-        };
-
-        llvm::errs() << "Race detected in " << llvm::demangle(f.getName().str())
-                     << " between: \n  " << caret_loc(write_dbg_loc)
-                     << " on thread " << sample(domain(single_pair))
-                     << " and \n  " << caret_loc(acc_dbg_loc) << " on thread "
-                     << sample(range(single_pair)) << "\n";
-
-        llvm::errs() << sampl << "\n";
-
-        if (fstream) {
-          fstream << caret_loc(write_dbg_loc) << "\n";
-          fstream << caret_loc(acc_dbg_loc) << "\n";
-          fstream.close();
-        }
-      }
+      errs.emplace_back(DataRace{.instr1 = write_stmt,
+                                 .instr2 = read_stmt,
+                                 .level = conflict_level,
+                                 .clashing_tids = single_pair});
     });
-  } else {
-    llvm::WithColor(llvm::outs(), llvm::raw_ostream::GREEN, true) << "Clear!\n";
+
+    return errs;
   }
   return {};
 }
