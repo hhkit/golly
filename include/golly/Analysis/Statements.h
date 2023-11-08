@@ -109,14 +109,18 @@ public:
     Write,
   };
 
-  using Base::Base;
+  MemoryAccessStatement(const StatementConfig &cfg);
   static bool isDivider(const llvm::Instruction &);
   string_view getSuffix() const;
   const llvm::Value *getPointer() const;
   const llvm::Value *getOffset() const;
-  const llvm::Value *getPointerOperand() const;
 
   Access getAccessType() const;
+
+private:
+  const llvm::Value *ptr{};
+  const llvm::Value *offset{};
+  const llvm::Value *getPointerOperand() const;
 };
 
 namespace detail {

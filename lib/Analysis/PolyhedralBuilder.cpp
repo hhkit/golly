@@ -10,6 +10,7 @@
 
 #include <fmt/format.h>
 
+#include <llvm/IR/Operator.h>
 #include <llvm/Support/FormatVariadic.h>
 
 namespace golly {
@@ -586,44 +587,60 @@ struct PolyhedralBuilder {
     union_map reads{"{}"};
     union_map writes{"{}"};
 
+    auto get_cta = [&](space sp) -> islpp::multi_aff {
+      multi_aff expr = null_tuple(sp);
+      int index = 0;
+      for (auto &&iv : detection.getGlobalContext().induction_vars) {
+        if (iv.kind == InstantiationVariable::Kind::Block)
+          expr =
+              flat_range_product(expr, sp.coeff<multi_aff>(dim::in, index, 1));
+        index++;
+      }
+      return expr;
+    };
+
     scc.traverse([&](const llvm::BasicBlock *bb) {
       auto loop = li.getLoopFor(bb);
       auto &context = detection.getLoopInfo(loop)->context;
       auto sp = get_space(spacify(context, se));
-      auto affinator = ScevAffinator{.se = se, .context = context, .sp = sp};
+      auto affinator = PtrScevAffinator{
+          .ptr =
+              PtrAffinator{
+                  .se = se,
+              },
+          .scev = ScevAffinator{.se = se, .context = context, .sp = sp}};
 
       for (auto &stmt : stmts.iterateStatements(*bb)) {
         if (auto mem_acc = stmt.as<golly::MemoryAccessStatement>()) {
-          auto ptr = mem_acc->getPointer();
-          auto ptr_name = ptr->getName();
+          auto val = mem_acc->getDefiningInstruction().getOperand(1);
+          auto [ptr, scev] =
+              affinator.visit(se.getSCEV(const_cast<llvm::Value *>(val)));
+          // llvm::dbgs() << "expr: "
+          //              << *se.getSCEV(const_cast<llvm::Value *>(val)) <<
+          //              "\n";
+          // llvm::dbgs() << "ptr: " << ptr << "\n";
+          // llvm::dbgs() << "scev: " << scev << "\n";
 
-          if (auto offset = mem_acc->getOffset()) {
-            if (auto val = affinator.visit(const_cast<llvm::Value *>(offset))) {
-              auto as_map = name(name(map{*val}, dim::out, ptr_name), dim::in,
-                                 stmt.getName());
-              if (mem_acc->getAccessType() ==
-                  MemoryAccessStatement::Access::Read)
-                reads = reads + union_map{as_map};
-              else
-                writes = writes + union_map{as_map};
-            } else {
-              // non-affine offset
-              // ignore
-            }
-          } else {
-            // there is no offset
-            // treat it as 0
-            auto zero = sp.zero<pw_aff>();
-            auto as_map = name(name(map{zero}, dim::out, ptr_name), dim::in,
-                               stmt.getName());
-            if (mem_acc->getAccessType() == MemoryAccessStatement::Access::Read)
-              reads = reads + union_map{as_map};
-            else {
-              assert(mem_acc->getAccessType() ==
-                     MemoryAccessStatement::Access::Write);
-              writes = writes + union_map{as_map};
-            }
-          }
+          if (!(ptr && scev))
+            continue;
+
+          auto ptr_name = (*ptr)->getName();
+
+          auto name_expr = [&](auto expr) -> map {
+            return name(name(map{expr}, dim::out, ptr_name), dim::in,
+                        stmt.getName());
+          };
+
+          auto ptr_expr = map{cuda.isSharedMemoryPtr(*ptr)
+                                  ? get_cta(sp)      // [cta, tid] -> [cta]
+                                  : null_tuple(sp)}; // [cta, tid] -> []
+
+          auto as_map = name_expr(flat_range_product(ptr_expr, map{*scev}));
+
+          if (mem_acc->getAccessType() == MemoryAccessStatement::Access::Read)
+            reads = reads + union_map{as_map};
+          else
+            writes = writes + union_map{as_map};
         }
       }
     });

@@ -7,6 +7,8 @@
 #include <llvm/ADT/Optional.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/Support/FormatVariadic.h>
 
 namespace golly {
@@ -153,6 +155,19 @@ struct ScevAffinator
     if (int pos = context.getIVarIndex(value); pos != -1)
       return ISLPP_CHECK(sp.coeff<pw_aff>(dim::in, pos, 1));
 
+    // value is a pointer
+    if (value->getType()->isPointerTy()) {
+      // if is a pointer we care about
+      if (llvm::isa<llvm::Argument>(value) ||
+          llvm::isa<llvm::GlobalValue>(value))
+        return ISLPP_CHECK(sp.zero<pw_aff>());
+
+      // if it is a pointer we are casting around
+      auto use = value->getSingleUndroppableUse();
+      if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastOperator>(use))
+        return visit(se.getSCEV(op->getOperand(0)));
+    }
+
     return llvm::None;
   }
   RetVal visitSRemInstruction(llvm::Instruction *instr) {
@@ -188,6 +203,152 @@ struct ScevAffinator
 
   using Base::visit;
   RetVal visit(llvm::Value *val) { return visit(se.getSCEV(val)); }
+};
+
+struct PtrAffinator
+    : llvm::SCEVVisitor<PtrAffinator, llvm::Optional<const llvm::Value *>> {
+
+  using Base =
+      llvm::SCEVVisitor<PtrAffinator, llvm::Optional<const llvm::Value *>>;
+  using RetVal = llvm::Optional<const llvm::Value *>;
+
+  llvm::ScalarEvolution &se;
+
+  RetVal visitConstant(const llvm::SCEVConstant *cint) { return llvm::None; }
+  RetVal visitAddExpr(const llvm::SCEVAddExpr *S) { return visitOperands(S); }
+  RetVal visitMulExpr(const llvm::SCEVMulExpr *S) { return visitOperands(S); }
+  RetVal visitPtrToIntExpr(const llvm::SCEVPtrToIntExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitTruncateExpr(const llvm::SCEVTruncateExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitZeroExtendExpr(const llvm::SCEVZeroExtendExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitSignExtendExpr(const llvm::SCEVSignExtendExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitSMaxExpr(const llvm::SCEVSMaxExpr *S) { return visitOperands(S); }
+  RetVal visitUMaxExpr(const llvm::SCEVUMaxExpr *S) { return visitOperands(S); }
+  RetVal visitSMinExpr(const llvm::SCEVSMinExpr *S) { return visitOperands(S); }
+  RetVal visitUMinExpr(const llvm::SCEVUMinExpr *S) { return visitOperands(S); }
+
+  RetVal visitUDivExpr(const llvm::SCEVUDivExpr *S) { return llvm::None; }
+
+  RetVal visitSDivInstruction(llvm::Instruction *SDiv, const llvm::SCEV *Expr) {
+    return llvm::None;
+  }
+  RetVal visitDivision(const llvm::SCEV *dividend, const llvm::SCEV *divisor,
+                       const llvm::SCEV *S, llvm::Instruction *inst = nullptr) {
+    return llvm::None;
+  }
+
+  RetVal visitAddRecExpr(const llvm::SCEVAddRecExpr *S) {
+    return visitOperands(S);
+  }
+
+  RetVal visitSequentialUMinExpr(const llvm::SCEVSequentialUMinExpr *S) {
+    return visitOperands(S);
+  }
+  RetVal visitUnknown(const llvm::SCEVUnknown *S) {
+    auto val = S->getValue();
+    if (llvm::isa<llvm::GlobalValue>(val) || llvm::isa<llvm::Argument>(val)) {
+      if (val->getType()->isPointerTy())
+        return val;
+    }
+
+    auto use = val->getSingleUndroppableUse();
+    assert(use);
+    if (auto op = llvm::dyn_cast<llvm::AddrSpaceCastOperator>(use))
+      return visit(se.getSCEV(op->getOperand(0)));
+
+    return llvm::None;
+  }
+  RetVal visitSRemInstruction(llvm::Instruction *instr) { return llvm::None; }
+
+  RetVal visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) {
+    // todo
+    return llvm::None;
+  }
+
+  RetVal visitOperands(const llvm::SCEVNAryExpr *S) {
+    for (int i = 1; i < S->getNumOperands(); ++i)
+      if (auto op = visit(S->getOperand(i)))
+        return op;
+
+    return llvm::None;
+  }
+
+  using Base::visit;
+};
+
+struct PtrScevAffinator
+    : llvm::SCEVVisitor<PtrScevAffinator, std::pair<PtrAffinator::RetVal,
+                                                    ScevAffinator::RetVal>> {
+
+  using Base =
+      llvm::SCEVVisitor<PtrScevAffinator,
+                        std::pair<PtrAffinator::RetVal, ScevAffinator::RetVal>>;
+  using RetVal = std::pair<PtrAffinator::RetVal, ScevAffinator::RetVal>;
+
+  PtrAffinator ptr;
+  ScevAffinator scev;
+
+  RetVal visitConstant(const llvm::SCEVConstant *cint) {
+    return {ptr.visitConstant(cint), scev.visitConstant(cint)};
+  }
+  RetVal visitAddExpr(const llvm::SCEVAddExpr *S) {
+    return {ptr.visitAddExpr(S), scev.visitAddExpr(S)};
+  }
+  RetVal visitMulExpr(const llvm::SCEVMulExpr *S) {
+    return {ptr.visitMulExpr(S), scev.visitMulExpr(S)};
+  }
+  RetVal visitPtrToIntExpr(const llvm::SCEVPtrToIntExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitTruncateExpr(const llvm::SCEVTruncateExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitZeroExtendExpr(const llvm::SCEVZeroExtendExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitSignExtendExpr(const llvm::SCEVSignExtendExpr *S) {
+    return visit(S->getOperand());
+  }
+  RetVal visitSMaxExpr(const llvm::SCEVSMaxExpr *S) {
+    return {ptr.visitSMaxExpr(S), scev.visitSMaxExpr(S)};
+  }
+  RetVal visitUMaxExpr(const llvm::SCEVUMaxExpr *S) {
+    return {ptr.visitUMaxExpr(S), scev.visitUMaxExpr(S)};
+  }
+  RetVal visitSMinExpr(const llvm::SCEVSMinExpr *S) {
+    return {ptr.visitSMinExpr(S), scev.visitSMinExpr(S)};
+  }
+  RetVal visitUMinExpr(const llvm::SCEVUMinExpr *S) {
+    return {ptr.visitUMinExpr(S), scev.visitUMinExpr(S)};
+  }
+
+  RetVal visitUDivExpr(const llvm::SCEVUDivExpr *S) {
+    return {ptr.visitUDivExpr(S), scev.visitUDivExpr(S)};
+  }
+
+  RetVal visitAddRecExpr(const llvm::SCEVAddRecExpr *S) {
+    return {ptr.visitAddRecExpr(S), scev.visitAddRecExpr(S)};
+  }
+
+  RetVal visitSequentialUMinExpr(const llvm::SCEVSequentialUMinExpr *S) {
+    return {ptr.visitSequentialUMinExpr(S), scev.visitSequentialUMinExpr(S)};
+  }
+  RetVal visitUnknown(const llvm::SCEVUnknown *S) {
+    return {ptr.visitUnknown(S), scev.visitUnknown(S)};
+  }
+
+  RetVal visitCouldNotCompute(const llvm::SCEVCouldNotCompute *S) {
+    return {ptr.visitCouldNotCompute(S), scev.visitCouldNotCompute(S)};
+  }
+
+  using Base::visit;
 };
 
 struct ConditionalAffinator

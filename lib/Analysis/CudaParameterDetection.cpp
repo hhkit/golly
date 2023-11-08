@@ -70,6 +70,7 @@ public:
   Builder &addUsage(const llvm::Value *val, Intrinsic in);
   Builder &addParameter(Intrinsic in);
   Builder &addSize(Dimension in, int count);
+  Builder &addSharedMemoryPtr(const llvm::Value *val);
 
   int block_dims_specified() const {
     return std::ranges::count_if(wip.getDimCounts(), [](const auto &v) {
@@ -88,53 +89,6 @@ private:
   friend class CudaParameterDetection;
 };
 
-struct DimParser : cl::parser<dim3> {
-  using cl::parser<dim3>::parser;
-
-  bool parse(cl::Option &O, llvm::StringRef ArgName, llvm::StringRef argValue,
-             dim3 &Val) {
-    using namespace ctre;
-
-    if (auto [whole, xs, ys, zs] =
-            ctre::match<"\\[(\\d+),\\s*(\\d+),\\s*(\\d+)\\]">(argValue);
-        whole) {
-      int x, y, z;
-      std::from_chars(xs.begin(), xs.end(), x);
-      std::from_chars(ys.begin(), ys.end(), y);
-      std::from_chars(zs.begin(), zs.end(), z);
-      Val.x = x;
-      Val.y = y;
-      Val.z = z;
-      return false;
-    };
-
-    if (auto [whole, xs, ys] = ctre::match<"\\[(\\d+),\\s*(\\d+)\\]">(argValue);
-        whole) {
-      int x, y;
-      std::from_chars(xs.begin(), xs.end(), x);
-      std::from_chars(ys.begin(), ys.end(), y);
-      Val.x = x;
-      Val.y = y;
-      return false;
-    };
-
-    if (auto [whole, xs] = ctre::match<"\\[(\\d+)\\]">(argValue); whole) {
-      int x;
-      std::from_chars(xs.begin(), xs.end(), x);
-      Val.x = x;
-      return false;
-    };
-
-    if (auto [whole, xs] = ctre::match<"(\\d+)">(argValue); whole) {
-      int x;
-      std::from_chars(xs.begin(), xs.end(), x);
-      Val.x = x;
-      return false;
-    };
-    return false;
-  }
-};
-
 Optional<Intrinsic> CudaParameters::getIntrinsic(const llvm::Value *val) const {
   if (auto itr = detections.find(val); itr != detections.end())
     return itr->second;
@@ -150,6 +104,14 @@ int CudaParameters::getCount(Dimension dim) const { return dim_count.at(dim); }
 
 const std::map<Dimension, int> &CudaParameters::getDimCounts() const {
   return dim_count;
+}
+
+bool CudaParameters::isSharedMemoryPtr(const llvm::Value *ptr) const {
+  return shared_mem_ptrs.contains(ptr);
+}
+
+ArrayRef<const llvm::Value *> CudaParameters::getSharedMemoryPtrs() const {
+  return shared_mem_ptrs.getArrayRef();
 }
 
 string_view CudaParameters::getAlias(Dimension dim) {
@@ -181,6 +143,13 @@ struct IntrinsicFinder : llvm::InstVisitor<IntrinsicFinder> {
       }
     }
   }
+
+  void visitGetElementPtr(llvm::GetElementPtrInst &inst) {
+    auto ptr_operand = inst.getPointerOperand();
+    if (llvm::dyn_cast<llvm::GlobalValue>(ptr_operand)) {
+      builder.addSharedMemoryPtr(ptr_operand);
+    }
+  }
 };
 
 CudaParameters::Builder &
@@ -201,6 +170,12 @@ CudaParameters::Builder &CudaParameters::Builder::addParameter(Intrinsic in) {
 CudaParameters::Builder &CudaParameters::Builder::addSize(Dimension in,
                                                           int count) {
   wip.dim_count[in] = count;
+  return *this;
+}
+
+CudaParameters::Builder &
+CudaParameters::Builder::addSharedMemoryPtr(const llvm::Value *val) {
+  wip.shared_mem_ptrs.insert(val);
   return *this;
 }
 
@@ -227,6 +202,10 @@ CudaParameters CudaParameters::Builder::build() {
   }
 
   wip.finalized = true;
+
+  for (auto &elem : wip.getSharedMemoryPtrs()) {
+    llvm::dbgs() << "shmem: " << *elem << "\n";
+  }
   return std::move(wip);
 }
 
@@ -269,6 +248,11 @@ AnalysisKey CudaParameterDetection::Key;
 CudaParameterDetection::Result
 CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   CudaParameters::Builder b;
+
+  for (auto &global : f.getParent()->getGlobalList()) {
+    if (global.getType()->isPointerTy())
+      b.addSharedMemoryPtr(&global);
+  }
 
   IntrinsicFinder visitor{b};
   visitor.visit(f);

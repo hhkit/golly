@@ -365,6 +365,8 @@ MAP_OPERATORS(map, set);
 CLOSED_UNOP(set, flatten, isl_set_flatten);
 CLOSED_UNOP(map, flatten, isl_map_flatten);
 CLOSED_BINOP(map, flat_cross, isl_map_flat_product);
+CLOSED_BINOP(map, flat_range_product, isl_map_flat_range_product);
+
 CLOSED_BINOP(map, apply_range, isl_map_apply_range);
 CLOSED_BINOP(map, apply_domain, isl_map_apply_domain);
 CLOSED_UNOP(map, domain_map, isl_map_domain_map);

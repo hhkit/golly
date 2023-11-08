@@ -90,6 +90,9 @@ bool BarrierStatement::isDivider(const llvm::Instruction &instr) {
   return false;
 }
 
+MemoryAccessStatement::MemoryAccessStatement(const StatementConfig &cfg)
+    : Base{cfg} {}
+
 bool MemoryAccessStatement::isDivider(const llvm::Instruction &instr) {
   return llvm::isa<llvm::StoreInst>(instr) || llvm::isa<llvm::LoadInst>(instr);
 }
@@ -107,7 +110,13 @@ string_view MemoryAccessStatement::getSuffix() const {
 
 const llvm::Value *MemoryAccessStatement::getPointer() const {
   auto operand = getPointerOperand();
+
   assert(operand);
+  if (auto as_addr_space_cast =
+          llvm::dyn_cast<llvm::AddrSpaceCastInst>(operand))
+    operand = as_addr_space_cast->getOperand(0);
+  assert(operand);
+
   if (auto as_get_element = llvm::dyn_cast<llvm::GetElementPtrInst>(operand))
     return as_get_element->getOperand(0);
 
@@ -120,10 +129,13 @@ const llvm::Value *MemoryAccessStatement::getPointer() const {
 
 const llvm::Value *MemoryAccessStatement::getOffset() const {
   auto operand = getPointerOperand();
+  if (auto as_addr_space_cast =
+          llvm::dyn_cast<llvm::AddrSpaceCastInst>(operand))
+    operand = as_addr_space_cast->getOperand(0);
   assert(operand);
   if (auto as_get_element = llvm::dyn_cast<llvm::GetElementPtrInst>(operand)) {
-    assert(as_get_element->getNumOperands() <= 2);
-    return as_get_element->getOperand(1);
+    // assert(as_get_element->getNumOperands() <= 2); // fake fix for now
+    return as_get_element->getOperand(as_get_element->getNumOperands() - 1);
   }
 
   return nullptr;

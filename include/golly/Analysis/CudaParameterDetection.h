@@ -2,11 +2,13 @@
 #define GOLLY_ANALYSIS_CUDAPARAMETERDETECTION_H
 
 #include <llvm/ADT/Optional.h>
+#include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Pass.h>
 #include <map>
+#include <span>
 #include <string_view>
 
 namespace golly {
@@ -14,12 +16,14 @@ namespace golly {
 using llvm::AnalysisInfoMixin;
 using llvm::AnalysisKey;
 using llvm::AnalysisUsage;
+using llvm::ArrayRef;
 using llvm::DenseSet;
 using llvm::Function;
 using llvm::FunctionAnalysisManager;
 using llvm::FunctionPass;
 using llvm::Optional;
 using llvm::PreservedAnalyses;
+using llvm::SetVector;
 using llvm::SmallDenseMap;
 using llvm::SmallVector;
 using std::string_view;
@@ -56,6 +60,8 @@ public:
   int getDimensionIndex(Dimension dim) const;
   int getCount(Dimension dim) const;
   const std::map<Dimension, int> &getDimCounts() const;
+  bool isSharedMemoryPtr(const llvm::Value *) const;
+  ArrayRef<const llvm::Value *> getSharedMemoryPtrs() const;
 
   static string_view getAlias(Dimension dim);
 
@@ -69,6 +75,8 @@ private:
   std::map<Dimension, int> dim_count;
   std::map<Dimension, int> cached_dim_index;
   int grid_dim_count{};
+
+  SetVector<const llvm::Value *> shared_mem_ptrs;
 
   bool finalized = false;
 
