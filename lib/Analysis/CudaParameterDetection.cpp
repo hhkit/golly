@@ -203,9 +203,9 @@ CudaParameters CudaParameters::Builder::build() {
 
   wip.finalized = true;
 
-  for (auto &elem : wip.getSharedMemoryPtrs()) {
-    llvm::dbgs() << "shmem: " << *elem << "\n";
-  }
+  // for (auto &elem : wip.getSharedMemoryPtrs()) {
+  //   llvm::dbgs() << "shmem: " << *elem << "\n";
+  // }
   return std::move(wip);
 }
 
