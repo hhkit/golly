@@ -1,4 +1,5 @@
 __global__ void trivial_race(int *val, int *val2) {
-  val[0] = 1;
+  __shared__ int shmem[256];
+  shmem[0] = 1;
   __syncthreads();
 }
