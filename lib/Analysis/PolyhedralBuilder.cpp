@@ -10,6 +10,7 @@
 
 #include <fmt/format.h>
 
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/Operator.h>
 #include <llvm/Support/FormatVariadic.h>
 
@@ -612,19 +613,14 @@ struct PolyhedralBuilder {
 
       for (auto &stmt : stmts.iterateStatements(*bb)) {
         if (auto mem_acc = stmt.as<golly::MemoryAccessStatement>()) {
-          auto val = mem_acc->getDefiningInstruction().getOperand(1);
+          auto val = mem_acc->getAddressOperand();
           auto [ptr, scev] =
               affinator.visit(se.getSCEV(const_cast<llvm::Value *>(val)));
-          // llvm::dbgs() << "expr: "
-          //              << *se.getSCEV(const_cast<llvm::Value *>(val)) <<
-          //              "\n";
-          // llvm::dbgs() << "ptr: " << ptr << "\n";
-          // llvm::dbgs() << "scev: " << scev << "\n";
 
           if (!(ptr && scev))
             continue;
 
-          auto ptr_name = (*ptr)->getName();
+          auto ptr_name = llvm::demangle((*ptr)->getName().str());
 
           auto name_expr = [&](auto expr) -> map {
             return name(name(map{expr}, dim::out, ptr_name), dim::in,

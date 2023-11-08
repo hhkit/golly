@@ -112,8 +112,7 @@ public:
   MemoryAccessStatement(const StatementConfig &cfg);
   static bool isDivider(const llvm::Instruction &);
   string_view getSuffix() const;
-  const llvm::Value *getPointer() const;
-  const llvm::Value *getOffset() const;
+  const llvm::Value *getAddressOperand() const;
 
   Access getAccessType() const;
 

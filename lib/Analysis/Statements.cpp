@@ -108,36 +108,15 @@ string_view MemoryAccessStatement::getSuffix() const {
   return {};
 }
 
-const llvm::Value *MemoryAccessStatement::getPointer() const {
-  auto operand = getPointerOperand();
-
-  assert(operand);
-  if (auto as_addr_space_cast =
-          llvm::dyn_cast<llvm::AddrSpaceCastInst>(operand))
-    operand = as_addr_space_cast->getOperand(0);
-  assert(operand);
-
-  if (auto as_get_element = llvm::dyn_cast<llvm::GetElementPtrInst>(operand))
-    return as_get_element->getOperand(0);
-
-  if (auto type = operand->getType(); type && type->isPointerTy())
-    return operand;
-
-  assert(false);
-  return nullptr;
-}
-
-const llvm::Value *MemoryAccessStatement::getOffset() const {
-  auto operand = getPointerOperand();
-  if (auto as_addr_space_cast =
-          llvm::dyn_cast<llvm::AddrSpaceCastInst>(operand))
-    operand = as_addr_space_cast->getOperand(0);
-  assert(operand);
-  if (auto as_get_element = llvm::dyn_cast<llvm::GetElementPtrInst>(operand)) {
-    // assert(as_get_element->getNumOperands() <= 2); // fake fix for now
-    return as_get_element->getOperand(as_get_element->getNumOperands() - 1);
+const llvm::Value *MemoryAccessStatement::getAddressOperand() const {
+  switch (getAccessType()) {
+  case Access::Read:
+    return getDefiningInstruction().getOperand(0);
+  case Access::Write:
+    return getDefiningInstruction().getOperand(1);
   }
 
+  assert(false);
   return nullptr;
 }
 
