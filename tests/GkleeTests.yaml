@@ -1,77 +1,114 @@
 - file: add_loop_gpu/add_loop_gpu.cu
-  grid: 10
-  block: 1
+  kernels:
+  - name: add
+    grid: 10
+    block: 1
 - file: bank_conflict/bank_conflict.cu
-  grid: 1
-  block: 32
+  kernels:
+  - name: bc
+    grid: 1
+    block: 32
   error: bank conflict
 - file: both_ww_and_rw_race/both_ww_and_rw_race.cu
-  grid: 2
-  block: 128
-  error: data race - block
+  kernels:
+  - name: colonel
+    grid: 2
+    block: 128
+    error: race.grid
 - file: deadlock_0/deadlock_0.cu
-  grid: 2
-  block: 32
-  error: barrier divergence
+  kernels:
+  - name: dl
+    grid: 2
+    block: 32
+    error: bd.block
 - file: deadlock_1/deadlock_1.cu
-  grid: 2
-  block: 32
-  notes: bd false alarm
+  kernels:
+  - name: dl
+    grid: 2
+    block: 32
+    notes: bd false alarm
 - file: deadlock_2/deadlock_2.cu
-  grid: 1
-  block: 64
-  error: barrier divergence
+  kernels:
+  - name: dl
+    grid: 1
+    block: 64
+    error: bd.block
 - file: divergence/divergence.cu
-  grid: 2
-  block: 128
-  notes: race false alarm
+  kernels:
+  - name: div
+    grid: 2
+    block: 128
+    notes: race false alarm
 - file: dot_product/dot_product.cu
-  grid: 32
-  block: 256
-  notes: non-affine loop
+  kernels:
+  - name: dot
+    grid: 32
+    block: 256
+    notes: non-affine loop
 - file: hello/hello.cu
-  grid: 1
-  block: 16
+  kernels:
+  - name: hello
+    grid: 1
+    block: 16
 - file: host-gpu/host-gpu.cu
-  grid: 1
-  block: 100
+  kernels:
+  - name: kernel
+    grid: 1
+    block: 100
 - file: inter_block_race/inter_block_race.cu
-  grid: 2
-  block: 64
-  error: data race - block
+  kernels:
+  - name: k
+    grid: 2
+    block: 64
+    error: race.block
 - file: inter_block_race_benign/inter_block_race_benign.cu
-  grid: 2
-  block: 64
-  error: data race - block
+  kernels:
+  - name: k
+    grid: 2
+    block: 64
+    error: race.block
 - file: interwarp_0/interwarp_0.cu
-  grid: 1
-  block: 16
-  error: data race - warp
+  kernels:
+  - name: iwarp
+    grid: 1
+    block: 16
+    error: race.warp
 - file: interwarp_1/interwarp_1.cu
-  grid: 1
-  block: 16
-  error: data race - warp
+  kernels:
+  - name: iwarp
+    grid: 1
+    block: 16
+    error: race.warp
 - file: julia_gpu/julia_gpu.cu
-  grid: [30,30]
-  block: [1,1]
-  error: data race - warp
+  kernels:
+  - name: kernel
+    grid: [30,30]
+    block: [1,1]
+    error: race.warp
 - file: max/max.cu
-  grid: 1
-  block: 8
-  notes: non-affine loop
+  kernels:
+  - name: mmax
+    grid: 1
+    block: 8
+    notes: non-affine loop
 - file: med/med2.cu
-  grid: 1
-  block: 9
-  notes: run-time parameter
+  kernels:
+  - name: avg
+    grid: 1
+    block: 9
+    notes: run-time parameter
 - file: missing_volatile/missing_volatile.cu
-  grid: 1
-  block: 32
-  error: data race- warp
-  notes: run-time parameter
+  kernels:
+  - name: k
+    grid: 1
+    block: 32
+    error: race.warp
 - file: no_sym_sink_0/no_sym_sink_0.cu
-  grid: 1
-  block: 8
-  notes: run time access of in[tid]
+  kernels:
+  - name: k
+    grid: 1
+    block: 8
+    notes: run time access of in[tid]
 # - file: no_sym_sink_1/no_sym_sink_1.cu
 #   grid: 1
 #   block: 8
@@ -79,63 +116,91 @@
 # - file: pascals_triangle/pascals_triangle.cu
 #   grid: 16
 #   block: 1024
-# - file: prescan/prescan.cu
-  grid: 1
-  block: 128
-  notes: function call, non affine loop
+- file: prescan/prescan.cu
+  kernels:
+  - name: compact
+    grid: 1
+    block: 128
+    notes: function call, non affine loop
 - file: read_write_race_0/read_write_race_0.cu
-  grid: 1
-  block: 128
-  error: data race - global
-  notes: constant runtime parameter guarding outermost if block
+  kernels:
+  - name: device_global
+    grid: 1
+    block: 128
+    error: race.grid
+    notes: constant runtime parameter guarding outermost if block
 - file: seive0/seive0.cu
-  grid: 1
-  block: 32
-  notes: thread-unique runtime parameter guarding if block in loop
+  kernels:
+  - name: device_global
+    grid: 1
+    block: 32
+    notes: thread-unique runtime parameter guarding if block in loop
 - file: seive1/seive1.cu
-  grid: 2
-  block: 16
-  notes: thread-unique runtime parameter guarding if block in loop
+  kernels:
+  - name: device_global
+    grid: 2
+    block: 16
+    notes: thread-unique runtime parameter guarding if block in loop
 - file: seive2/seive2.cu
-  grid: 2
-  block: 16
-  notes: thread-unique runtime parameter guarding if block in loop
+  kernels:
+  - name: device_global
+    grid: 2
+    block: 16
+    notes: thread-unique runtime parameter guarding if block in loop
 - file: stack_overlow_atomics/stack_overflow_atomics.cu
-  grid: 2
-  block: 32
-  error: stack overflow
+  kernels:
+  - name: test
+    grid: 2
+    block: 32
+    error: stack overflow
 - file: symmetric_and_data_flow/symmetric_and_data_flow.cu
-  grid: 2
-  block: 32
-  error: data race - block
+  kernels:
+  - name: device_global
+    grid: 2
+    block: 32
+    error: race.block
 - file: symmetric_and_no_data_flow/symmetric_and_no_data_flow.cu
-  grid: 1
-  block: 64
-  error: data race - block
+  kernels:
+  - name: device_global
+    grid: 1
+    block: 64
+    error: race.block
 - file: warp_bd_race/warp_bd_race.cu
-  grid: 1
-  block: 16
-  error: data race - warp
+  kernels:
+  - name: k
+    grid: 1
+    block: 16
+    error: race.warp
 - file: warp_bd_race_benign/warp_bd_race_benign.cu
-  grid: 1
-  block: 16
-  error: data race - warp
-  notes: wriets the same value
+  kernels:
+  - name: 
+    grid: 1
+    block: 16
+    error: race.warp
+    notes: writes the same value
 - file: warp_nbd_race/warp_nbd_race.cu
-  grid: 1
-  block: 16
-  error: data race - warp
+  kernels:
+  - name: k
+    grid: 1
+    block: 16
+    error: race.warp
 - file: warp_nbd_race_benign/warp_nbd_race_benign.cu
-  grid: 1
-  block: 16
-  error: data race - warp
-  notes: writes the same value
+  kernels:
+  - name: k
+    grid: 1
+    block: 16
+    error: race.warp
+    notes: writes the same value
 - file: write_write_race_0/write_write_race_0.cu
-  grid: 1
-  block: 64
-  error: data race - global
-  notes: mod by runtime parameter - 32 items but 64 threads
+  kernels:
+  - name: device_global
+    grid: 1
+    block: 64
+    error: race.grid
+    notes: mod by runtime parameter - 32 items but 64 threads
 - file: write_write_race_1/write_write_race_1.cu
-  grid: 1
-  block: 32
-  error: data race - global
+  kernels:
+  - name: device_global
+    grid: 1
+    block: 32
+    error: race.warp

@@ -14,6 +14,16 @@ isl_manager &getManager() {
 
 isl_ctx *ctx() { return getManager().get(); }
 
+std::optional<std::string> getLastError() {
+  if (isl_ctx_last_error(ctx()) != isl_error::isl_error_none) {
+    auto last_err = isl_ctx_last_error_msg(ctx());
+    isl_ctx_reset_error(ctx());
+    auto ret = std::string(last_err);
+    // free((void *)last_err);
+    return last_err;
+  }
+  return std::nullopt;
+}
 // isl_manager
 isl_manager::isl_manager() : base{isl_ctx_alloc()} {}
 

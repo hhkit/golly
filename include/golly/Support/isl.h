@@ -14,6 +14,7 @@
 #include <isl/union_map.h>
 #include <isl/union_set.h>
 #include <isl/val.h>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -87,6 +88,8 @@ public:
 };
 
 isl_ctx *ctx();
+
+std::optional<std::string> getLastError();
 
 enum class dim {
   constant = isl_dim_cst,

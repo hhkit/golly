@@ -21,6 +21,7 @@ struct GollyOptions {
   llvm::StringMap<Params> function_parameters;
 
   llvm::Optional<std::string> errorLog;
+  bool verboseLog = false;
 };
 
 llvm::Expected<GollyOptions> parseOptions(llvm::StringRef name);

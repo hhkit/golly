@@ -105,10 +105,7 @@ struct ScevAffinator
       auto pos = context.getIVarIndex(indvar);
       assert(pos >= 0);
 
-      // llvm::dbgs() << space << "\n";
       auto loop_expr = ISLPP_CHECK(sp.coeff<pw_aff>(dim::in, pos, 1));
-      // llvm::dbgs() << loop_expr << "\n";
-      // llvm::dbgs() << *step << "\n";
       return ISLPP_CHECK(loop_expr * *step);
     }
 
@@ -177,9 +174,12 @@ struct ScevAffinator
   RetVal visitSRemInstruction(llvm::Instruction *instr) {
     auto lhs = visit(se.getSCEV(instr->getOperand(0)));
     auto rhs = visit(se.getSCEV(instr->getOperand(1)));
-    if (lhs && rhs)
-      return ISLPP_CHECK(*lhs % *rhs);
-    else
+    if (lhs && rhs) {
+      auto val = *lhs % *rhs;
+      if (islpp::getLastError())
+        return llvm::None;
+      return val;
+    } else
       return llvm::None;
   }
 
