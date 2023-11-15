@@ -13,3 +13,4 @@ apt install -y \
     && apt autoremove \
     && apt clean -y \
     && rm -rf /var/lib/apt/lists/*
+git submodule update --recursive --init
