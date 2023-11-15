@@ -42,6 +42,7 @@ add_definitions(${LLVM_DEFINITIONS_LIST})
 add_subdirectory(lib)
 
 add_subdirectory(barrier-repair)
+add_subdirectory(tools)
 
 # # Find the libraries that correspond to the LLVM components
 # # that we wish to use
