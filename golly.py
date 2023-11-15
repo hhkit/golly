@@ -61,20 +61,18 @@ def analyze(file: path.Path, patchFile: path.Path, config: path.Path, verbose: b
     options = {}
     if config is not None: options["config"] = config 
     if patchFile is not None: options["outfile"] = patchFile
+    if verbose: options["verbose"] = None
 
-    optionStr = f"<{';'.join(f'{k}={v}' for k,v in options.items())}>"  if len(options) > 0 else ""
+    optionStr = f"<{';'.join(f'{k}={v}' if v is not None else f'{k}' for k,v in options.items())}>"  if len(options) > 0 else ""
 
-    cmd = [
-            "opt",
-            "-load",
-            f"{golly_path}",
+    cmd = [ "opt",
             f"--load-pass-plugin={golly_path}",
             "--passes=golly" + optionStr,
             "--disable-output",
             file.resolve(),
-        ] + (["--golly-verbose"] if verbose else []) 
+          ]
     # + ([f"--golly-out={patchFile}" if patchFile is not None else []])
-    print("command: " + " ".join(map(str, cmd)))
+    # print("command: " + " ".join(map(str, cmd)))
     sp.run(cmd)
 
 
