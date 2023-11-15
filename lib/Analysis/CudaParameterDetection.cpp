@@ -2,7 +2,6 @@
 #include "golly/Support/GollyOptions.h"
 #include "golly/golly.h"
 #include <charconv>
-#include <ctre-unicode.hpp>
 #include <fmt/format.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/IR/InstVisitor.h>
