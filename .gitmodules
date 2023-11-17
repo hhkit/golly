@@ -1,12 +1,6 @@
 [submodule "tests/polybenchGpu"]
 	path = tests/polybenchGpu
 	url = https://github.com/sgrauerg/polybenchGpu
-[submodule "tests/gpuverify"]
-	path = tests/gpuverify
-	url = https://github.com/mc-imperial/gpuverify
-[submodule "tests/DRACC"]
-	path = tests/DRACC
-	url = https://github.com/RWTH-HPC/DRACC
 [submodule "tests/simulee/kaldi"]
 	path = tests/simulee/kaldi
 	url = https://github.com/kaldi-asr/kaldi
@@ -28,9 +22,6 @@
 [submodule "tests/simulee/gunrock"]
 	path = tests/simulee/gunrock
 	url = https://github.com/gunrock/gunrock
-[submodule "tests/Gklee"]
-	path = tests/Gklee
-	url = https://github.com/lipeng28/Gklee
 [submodule "tests/GkleeTests"]
 	path = tests/GkleeTests
 	url = https://github.com/Geof23/GkleeTests
