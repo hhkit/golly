@@ -18,6 +18,7 @@ static llvm::cl::extrahelp
 
 int main(int argc, const char **argv) {
   using namespace clang::tooling;
+  using namespace clang::transformer;
   using namespace clang::ast_matchers;
 
   // CommonOptionsParser constructor will parse arguments and create a
@@ -33,10 +34,12 @@ int main(int argc, const char **argv) {
                  OptionsParser->getSourcePathList());
 
   clang::ast_matchers::MatchFinder Finder;
-  nus::test::MatchPrinter Printer;
   auto MatchRule =
-      functionDecl(hasAttr(clang::attr::Kind::CUDAGlobal)).bind("func");
-
+      functionDecl(allOf(unless(hasAttr(clang::attr::Kind::CUDAGlobal)),
+                         unless(hasAttr(clang::attr::Kind::CUDADevice))))
+          .bind("func");
+  auto RewriteRule = makeRule(MatchRule, remove(node("func")));
+  nus::test::RewritePrinter Printer{RewriteRule};
   Finder.addMatcher(MatchRule, &Printer);
 
   return Tool.run(newFrontendActionFactory(&Finder).get());
