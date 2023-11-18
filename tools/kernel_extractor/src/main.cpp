@@ -12,7 +12,7 @@
 
 // Apply a custom category to all command-line options so that they are the
 // only ones displayed.
-static llvm::cl::OptionCategory MyToolCategory("my-tool options");
+static llvm::cl::OptionCategory MyToolCategory("kernel extractor options");
 static llvm::cl::extrahelp
     CommonHelp(clang::tooling::CommonOptionsParser::HelpMessage);
 
@@ -40,6 +40,7 @@ int main(int argc, const char **argv) {
           .bind("func");
   auto RewriteRule = makeRule(MatchRule, remove(node("func")));
   nus::test::RewritePrinter Printer{RewriteRule};
+  // nus::test::MatchPrinter Printer;
   Finder.addMatcher(MatchRule, &Printer);
 
   return Tool.run(newFrontendActionFactory(&Finder).get());

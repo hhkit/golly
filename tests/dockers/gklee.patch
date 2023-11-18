@@ -1,0 +1,24 @@
+diff --git a/cmake/modules/SetupExterns.cmake b/cmake/modules/SetupExterns.cmake
+index 1e1e362..14180f4 100644
+--- a/cmake/modules/SetupExterns.cmake
++++ b/cmake/modules/SetupExterns.cmake
+@@ -9,7 +9,7 @@ find_program(BASH bash)
+ 
+ set(
+   PCMD 
+-  cd ${LLVM_SRC}/src/LLVM/tools && if [ ! -e clang ]$<SEMICOLON> then ${DOWNLOAD} http://www.llvm.org/releases/3.2/clang-3.2.src.tar.gz && ${EXTRACT} -zxf clang-3.2.src.tar.gz && mv -f clang-3.2.src clang && rm clang-3.2.src.tar.gz && cd clang && cp ${CMAKE_SOURCE_DIR}/patch/clang.patch ./ && ${PATCH} -p1 -N < clang.patch$<SEMICOLON> fi && cd ${LLVM_SRC}/src/LLVM/projects && if [ ! -e compiler-rt ]$<SEMICOLON> then ${DOWNLOAD} http://www.llvm.org/releases/3.2/compiler-rt-3.2.src.tar.gz && ${EXTRACT} -zxf compiler-rt-3.2.src.tar.gz && mv compiler-rt-3.2.src compiler-rt && rm compiler-rt-3.2.src.tar.gz && cd compiler-rt/lib/asan && cp ${LLVM_SRC}/patch/compiler-rt_lib_asan.patch . && ${PATCH} -p1 -N compiler-rt_lib_asan.patch$<SEMICOLON> fi
++  cd ${LLVM_SRC}/src/LLVM/tools && if [ ! -e clang ]$<SEMICOLON> then ${DOWNLOAD} http://www.llvm.org/releases/3.2/clang-3.2.src.tar.gz && ${EXTRACT} -zxf clang-3.2.src.tar.gz && mv -f clang-3.2.src clang && rm clang-3.2.src.tar.gz && cd clang && cp ${CMAKE_SOURCE_DIR}/patch/clang.patch ./ && ${PATCH} -p1 -N < clang.patch$<SEMICOLON> fi && cd ${LLVM_SRC}/src/LLVM/projects && if [ ! -e compiler-rt ]$<SEMICOLON> then ${DOWNLOAD} http://www.llvm.org/releases/3.2/compiler-rt-3.2.src.tar.gz && ${EXTRACT} -zxf compiler-rt-3.2.src.tar.gz && mv compiler-rt-3.2.src compiler-rt && rm compiler-rt-3.2.src.tar.gz && cd compiler-rt/lib/asan && cp ${LLVM_SRC}/../patch/compiler-rt_lib_asan_linux.patch . && ${PATCH} -p1 -N asan_linux.cc compiler-rt_lib_asan_linux.patch$<SEMICOLON> fi
+   )
+ string(REPLACE ";" " " PCMD "${PCMD}")
+ ExternalProject_add(
+diff --git a/patch/compiler-rt_lib_asan_linux.patch b/patch/compiler-rt_lib_asan_linux.patch
+index 4bd741d..3b18d91 100644
+--- a/patch/compiler-rt_lib_asan_linux.patch
++++ b/patch/compiler-rt_lib_asan_linux.patch
+@@ -1,5 +1,5 @@
+ --- asan_linux.cc	2021-03-16 05:20:08.830395600 -0700
+-+++ asan_linux_tmp.cc	2021-03-16 05:08:53.456615900 -0700
+++++ asan_linux.cc	2021-03-16 05:08:53.456615900 -0700
+ @@ -31,6 +31,7 @@
+  #include <stdio.h>
+  #include <unistd.h>

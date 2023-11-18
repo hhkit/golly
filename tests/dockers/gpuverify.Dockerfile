@@ -2,6 +2,7 @@ FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
 USER root 
 WORKDIR /
 
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update
 RUN apt install -y git build-essential python3 python3-pip python3-distutils wget unzip llvm clang libclang-dev
 RUN apt install ca-certificates gnupg
@@ -18,6 +19,15 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 RUN apt install -y libncurses5 libc6-dev-i386
 ENV PATH=$PATH:/gpuverify/2018-03-22
 ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+ENV C_INCLUDE_PATH="/usr/local/cuda/include:$C_INCLUDE_PATH"
+ENV CPLUS_INCLUDE_PATH="/usr/local/cuda/include:$CPLUS_INCLUDE_PATH"
 ENV PATH="/usr/local/cuda/bin:$PATH"
 
-ADD kernel_extractor kernel_extractor
+RUN apt install -y cmake
+ADD kernel_extractor.src /kernel_extractor.src
+WORKDIR /kernel_extractor.src/build
+RUN cmake ..
+RUN cmake --build .
+ENV PATH="/kernel_extractor.src/build:$PATH"
+
+WORKDIR /workspace

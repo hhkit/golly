@@ -5,16 +5,25 @@ import os
 import yaml
 import argparse
 import docker
+import time
+from statistics import mean
 
 parser = argparse.ArgumentParser(
-    prog="GPUVerify",
+    prog="GPUVerify profiler",
     )
 parser.add_argument("filename", type=path.Path)
+parser.add_argument("--profile", action="store_true")
+parser.add_argument("--profile-out", dest="profileOut", type=path.Path)
+parser.add_argument("--iters", type=int, default=1)
 args = parser.parse_args()
 
 def strip(s):
   return str(s).replace(' ', '')
 
+profile = bool(args.profile)
+iters = args.iters
+
+timings = {}
 
 if args.filename.suffix == ".yaml":
   with open(args.filename, 'r') as file:
@@ -31,21 +40,71 @@ if args.filename.suffix == ".yaml":
       g = strip(str(cfg['grid']))
 
       client = docker.from_env()
-      cont = client.containers.run(image="gpuver", volumes=[
+      cont = client.containers.run(image="gpuverify", volumes=[
         f"{os.getcwd()}/tests:/mnt/tests"
       ], command="bash", detach=True, tty=True)
+      
+      
 
+      # (_,out) = cont.exec_run(f"bash -c 'echo | clang -xc++ -E -v -'")
+      # (_,out) = cont.exec_run(f"bash -c 'clang -E /mnt/{filename} > /mnt/{filename}.pp.cu'")
+      (_,out) = cont.exec_run(f"bash -c 'kernel_extractor /mnt/{filename}'")
 
-      (_,out) = cont.exec_run(f"bash -c 'clang -E /mnt/{filename} > /mnt/{filename}.pp.cu'")
-      (_,out) = cont.exec_run(f"/kernel_extractor /mnt/{filename}.pp.cu", stderr=False)
-      (_,out) = cont.exec_run([
-        "gpuverify",
-        f"--blockDim={b}",
-        f"--gridDim={g}",
-        f"/mnt/{filename}.pp.cu.ext.cu"
-      ])
+      print(filename)
+      print(out.decode('UTF-8'))
+      
+      if (profile):
+        for i in range(iters):
+          start = time.perf_counter()
+          (ec,out) = cont.exec_run([
+            "gpuverify",
+            f"--blockDim={b}",
+            f"--gridDim={g}",
+            f"--clang-opt=--std=c++17",
+            f"--clang-opt=-nocudainc",
+            f"--clang-opt=-I/usr/include/c++/11",
+            f"--clang-opt=-I/usr/include/x86_64-linux-gnu/c++/11",
+            f"--clang-opt=-I/usr/include/c++/11/backward",
+            f"--clang-opt=-I/usr/lib/llvm-14/lib/clang/14.0.0/include",
+            f"--clang-opt=-I/usr/local/include",
+            f"--clang-opt=-I/usr/x86_64-linux-gnu/include",
+            f"--clang-opt=-I/usr/include/x86_64-linux-gnu",
+            f"--clang-opt=-I/include",
+            f"--clang-opt=-I/usr/include",
+            f"--clang-opt=-D_GNU_SOURCE", # needed for polybench
+            f"/mnt/{filename}.ext.cu",
+          ])
+          end = time.perf_counter()
+          dur = end - start
+          print(out.decode('UTF-8'))
+          if str(filename) not in timings:
+            timings[str(filename)] = { 'times': [dur], 'log': out.decode('UTF-8')}
+          else: 
+            timings[str(filename)]['times'].append(dur)
+      else: 
+        (_,out) = cont.exec_run([
+          "gpuverify",
+          f"--blockDim={b}",
+          f"--gridDim={g}",
+          f"--clang-opt=-nocudainc",
+          f"--clang-opt=-nocudalib",
+          f"/mnt/{filename}.pp.cu"
+        ])
       print(filename)
       print(out.decode('UTF-8'))
 
       cont.stop()
       cont.remove()
+
+  for k,v in timings.items():
+    times = v['times']
+    timings[k]['min'] = min(times)
+    timings[k]['avg'] = mean(times)
+    timings[k]['max'] = max(times)
+    
+  if args.profileOut is not None:
+    with open(args.profileOut, "w") as outFile:
+      outFile.write(yaml.dump(timings))
+  else:
+    print(str(timings))
+  
