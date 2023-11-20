@@ -354,21 +354,19 @@ struct PolyhedralBuilder {
 
     scc.traverse([&](const llvm::BasicBlock *bb) {
       for (auto &stmt : stmts.iterateStatements(*bb)) {
-        if (auto bar_stmt = stmt.as<golly::BarrierStatement>()) {
+        if (auto barrier = stmt.getBarrier()) {
           // llvm::dbgs() << "HEY\n";
           // use time as a measure of barrier instances
           // time -> tau
 
-          union_set s{name(set{"{[]}"}, bar_stmt->getName())};
+          union_set s{name(set{"{[]}"}, stmt.getName())};
           auto stmt_instances = apply(s, stmt_domain);
 
           // llvm::dbgs() << "insts: " << stmt_instances << "\n";
 
           if (is_empty(stmt_instances)) {
-            llvm::outs()
-                << "warning: unreachable barrier\n"
-                << *bar_stmt->getDefiningInstruction().getDebugLoc().get()
-                << "\n";
+            llvm::outs() << "warning: unreachable barrier\n"
+                         << (*barrier->instr).getDebugLoc().get() << "\n";
             continue;
           }
           auto time_map =
@@ -386,9 +384,7 @@ struct PolyhedralBuilder {
               range_subtract(range_product(beta_tau, beta_tau),
                              wrap(identity(range(beta_tau))));
 
-          auto &barrier = bar_stmt->getBarrier();
-          if (auto warp_bar =
-                  std::get_if<golly::BarrierStatement::Warp>(&barrier)) {
+          if (auto warp_bar = std::get_if<golly::Statement::Warp>(&*barrier)) {
             // collect all warps in this statement
 
             auto tau2warp = ISLPP_CHECK(apply_range(
@@ -417,7 +413,7 @@ struct PolyhedralBuilder {
 
             if ((waiting_warplanes > active_warplanes)) {
               errs.emplace_back(BarrierDivergence{
-                  .barrier = bar_stmt,
+                  .barrier = &stmt,
                   .level = Level::Warp,
               });
               continue;
@@ -466,7 +462,7 @@ struct PolyhedralBuilder {
           }
 
           if (auto block_bar =
-                  std::get_if<golly::BarrierStatement::Block>(&barrier)) {
+                  std::get_if<golly::Statement::Block>(&*barrier)) {
             // check for barrier divergence
 
             // collect all ctas in this statement
@@ -481,7 +477,7 @@ struct PolyhedralBuilder {
               // llvm::dbgs() << "active: " << beta_tau << "\n";
               if ((waiting_taus != beta_tau)) {
                 errs.emplace_back(BarrierDivergence{
-                    .barrier = bar_stmt,
+                    .barrier = &stmt,
                     .level = Level::Block,
                 });
                 continue;
@@ -508,8 +504,7 @@ struct PolyhedralBuilder {
                                    same_tau);
           }
 
-          if (auto global_bar =
-                  std::get_if<golly::BarrierStatement::End>(&barrier)) {
+          if (auto global_bar = std::get_if<golly::Statement::End>(&*barrier)) {
             auto tid_to_insts =
                 range_intersect(reverse(thread_alloc), stmt_instances);
             const auto active_threads = range(thread_alloc);
@@ -611,8 +606,8 @@ struct PolyhedralBuilder {
           .scev = ScevAffinator{.se = se, .context = context, .sp = sp}};
 
       for (auto &stmt : stmts.iterateStatements(*bb)) {
-        if (auto mem_acc = stmt.as<golly::MemoryAccessStatement>()) {
-          auto val = mem_acc->getAddressOperand();
+        for (auto &accesses : stmt.getAccesses()) {
+          auto val = accesses.pointer_operand;
           auto [ptr, scev] =
               affinator.visit(se.getSCEV(const_cast<llvm::Value *>(val)));
 
@@ -631,7 +626,7 @@ struct PolyhedralBuilder {
 
           auto as_map = name_expr(flat_range_product(ptr_expr, map{*scev}));
 
-          if (mem_acc->getAccessType() == MemoryAccessStatement::Access::Read)
+          if (accesses.access == Statement::Access::Read)
             reads = reads + union_map{as_map};
           else
             writes = writes + union_map{as_map};

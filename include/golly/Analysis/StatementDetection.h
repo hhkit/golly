@@ -9,6 +9,8 @@
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/PassManager.h>
 
+#include <list>
+
 namespace llvm {
 class Instruction;
 class Function;
@@ -31,44 +33,15 @@ using std::shared_ptr;
 
 // this analysis splits basic blocks into statements
 class StatementDetection {
-  DenseMap<const BasicBlock *, unique_ptr<Statement>> map;
+  DenseMap<const BasicBlock *, std::vector<Statement>> map;
   StringMap<const Statement *> cached_names;
 
 public:
-  struct StatementRange;
-
   void analyze(const Function &f);
   const Statement *getStatement(string_view name) const;
-  StatementRange iterateStatements(const BasicBlock &bb) const;
+  std::span<const Statement> iterateStatements(const BasicBlock &bb) const;
 
   llvm::raw_ostream &dump(llvm::raw_ostream &) const;
-};
-
-struct StatementDetection::StatementRange {
-  struct iterator;
-
-  iterator begin() const;
-  iterator end() const;
-
-  Statement *ptr_{};
-};
-
-struct StatementDetection::StatementRange::iterator {
-  Statement *ptr_{};
-
-  Statement &operator*() const { return *ptr_; }
-  Statement *operator->() const { return ptr_; };
-  iterator &operator++() {
-    ptr_ = ptr_->getSuccessor();
-    return *this;
-  }
-  iterator operator++(int) {
-    auto ret = *this;
-    this->operator++();
-    return ret;
-  }
-
-  auto operator<=>(const iterator &) const = default;
 };
 
 class StatementDetectionPass

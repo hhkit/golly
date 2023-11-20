@@ -10,7 +10,7 @@
 
 namespace golly {
 static const llvm::DILocation &getLoc(const Statement *stmt) {
-  return *stmt->getDefiningInstruction().getDebugLoc().get();
+  return *stmt->getLastInstruction().getDebugLoc().get();
 };
 void dumpYaml(const ErrorList &errs, std::filesystem::path yaml_out) {
   namespace fs = std::filesystem;

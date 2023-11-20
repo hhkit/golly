@@ -3,50 +3,54 @@
 #include <llvm/ADT/StringSet.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 #define DEBUG_TYPE "golly-detection"
 
 namespace golly {
 namespace detail {
 
-static unique_ptr<Statement> build(const BasicBlock &bb) {
-  auto beg = bb.begin();
-  auto itr = beg;
-  auto first = unique_ptr<Statement>();
+using divide_fn = bool(const llvm::Instruction &instr);
 
-  int count{};
-  Statement *prev{};
+constexpr auto divider_lut = std::array{
+    // low speed
+    +[](const llvm::Instruction &instr) -> bool {
+      return is_a_barrier(instr) || llvm::isa<llvm::StoreInst>(instr) ||
+             llvm::isa<llvm::LoadInst>(instr);
+    },
+    +[](const llvm::Instruction &instr) -> bool {
+      return is_a_barrier(instr) || llvm::isa<llvm::StoreInst>(instr);
+    },
+    +[](const llvm::Instruction &instr) -> bool { return is_a_barrier(instr); },
+};
 
-  auto append = [&](unsigned type, BasicBlock::const_iterator rbegin,
-                    BasicBlock::const_iterator rend) {
-    const auto name = fmt::format("{}::{}", bb.getName().str(), count++);
-    auto newNode = Statement::create(
-        type,
-        StatementConfig{.bb = &bb, .begin = rbegin, .end = rend, .name = name});
-    const auto new_ptr = newNode.get();
-    if (prev) {
-      prev->addSuccessor(std::move(newNode));
-    } else {
-      first = std::move(newNode);
-    }
-    prev = new_ptr;
-  };
+static int speed = 1;
+
+static std::vector<Statement> build(const BasicBlock &bb) {
+  std::vector<Statement> statements;
+
+  auto front = bb.begin();
+  auto itr = front;
+
+  auto divide = divider_lut[speed];
 
   while (itr != bb.end()) {
-    if (Statement::isStatementDivider(*itr)) {
-      auto type_index = dividerIndex(*itr);
-      // llvm::dbgs() << *itr << " -- has type " << type_index << "\n";
-      append(type_index, beg, (++itr));
-      beg = itr;
+    if (divide(*itr)) {
+      statements.emplace_back(
+          llvm::formatv("{0}_{1}", bb.getName(), statements.size()).str(),
+          front, ++itr);
+      front = itr;
       continue;
     }
     ++itr;
   }
 
-  if (beg != bb.end())
-    append(dividerIndex(*beg), beg, bb.end());
+  if (front != bb.end())
+    statements.emplace_back(
+        llvm::formatv("{0}_{1}", bb.getName(), statements.size()).str(), front,
+        bb.end());
 
-  return first;
+  return statements;
 }
 } // namespace detail
 
@@ -69,12 +73,12 @@ const Statement *StatementDetection::getStatement(string_view name) const {
   return nullptr;
 }
 
-StatementDetection::StatementRange
+std::span<const Statement>
 StatementDetection::iterateStatements(const BasicBlock &f) const {
-  if (auto itr = map.find(&f); itr != map.end()) {
-    return StatementRange{itr->second.get()};
-  }
-  return StatementRange{};
+  if (auto itr = map.find(&f); itr != map.end())
+    return itr->second;
+
+  return {};
 }
 
 llvm::raw_ostream &StatementDetection::dump(llvm::raw_ostream &os) const {
@@ -92,20 +96,11 @@ llvm::raw_ostream &StatementDetection::dump(llvm::raw_ostream &os) const {
   return os;
 }
 
-StatementDetection::StatementRange::iterator
-StatementDetection::StatementRange::begin() const {
-  return iterator{ptr_};
-}
-
-StatementDetection::StatementRange::iterator
-StatementDetection::StatementRange::end() const {
-  return iterator{};
-}
-
 StatementDetectionPass::Result
 StatementDetectionPass::run(Function &f, FunctionAnalysisManager &fam) {
   StatementDetection sbd;
   sbd.analyze(f);
+  // sbd.dump(llvm::dbgs());
   return sbd;
 }
 } // namespace golly

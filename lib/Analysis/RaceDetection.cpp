@@ -1,9 +1,13 @@
 #include "golly/Analysis/RaceDetection.h"
 #include "golly/ADT/PairSet.h"
+
 #include "golly/Analysis/CudaParameterDetection.h"
 #include "golly/Analysis/PolyhedralBuilder.h"
 #include "golly/Analysis/StatementDetection.h"
 #include "golly/Support/isl_llvm.h"
+
+#include "golly/Support/GollyOptions.h"
+#include "golly/golly.h"
 #include <filesystem>
 #include <fmt/format.h>
 
@@ -21,7 +25,7 @@ ErrorList RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   if (pscop.errors)
     return pscop.errors;
 
-  if (golly_verbose)
+  if (auto opts = RunGollyPass::getOptions(); opts && opts->verboseLog)
     llvm::dbgs() << pscop << "\n";
 
   auto tid_to_stmt_inst = reverse(pscop.thread_allocation);

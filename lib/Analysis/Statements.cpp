@@ -18,28 +18,12 @@ static llvm::StringSet block_instructions{
     "llvm.nvvm.barrier0",
 };
 
-template <typename... Ts>
-constexpr auto make_create_statement_lut(type_list<Ts...>) {
-  using CreateTy = unique_ptr<Statement>(const StatementConfig &);
-  return std::array<CreateTy *, sizeof...(Ts) + 1>{
-      ([](const StatementConfig &cfg) {
-        return unique_ptr<Statement>(new Ts(cfg));
-      })...,
-      ([](const StatementConfig &cfg) {
-        return unique_ptr<Statement>(new Statement(cfg));
-      })};
-}
-
-BarrierStatement::Barrier
+Statement::Barrier
 createBarrierMetadata(const llvm::Instruction &barrier_instr) {
   const auto as_fn = llvm::dyn_cast_or_null<llvm::CallInst>(&barrier_instr);
 
-  if (!as_fn) {
-    const auto as_ret =
-        llvm::dyn_cast_or_null<llvm::ReturnInst>(&barrier_instr);
-    if (as_ret)
-      return BarrierStatement::End{};
-  }
+  if (!as_fn && llvm::isa<llvm::ReturnInst>(&barrier_instr))
+    return Statement::End{};
 
   assert(as_fn && "defining instruction should be at least an intrinsic call");
 
@@ -50,115 +34,71 @@ createBarrierMetadata(const llvm::Instruction &barrier_instr) {
            "warp barrier should always have a mask");
 
     // retrieve mask
-    return BarrierStatement::Warp{as_fn->getArgOperand(0)};
+    return Statement::Warp{as_fn->getArgOperand(0)};
   }
 
-  if (block_instructions.contains(fn_name)) {
-    return BarrierStatement::Block();
-  }
+  if (block_instructions.contains(fn_name))
+    return Statement::Block();
 
-  return BarrierStatement::Block{};
+  assert(false);
+  return {};
+}
+
+Statement::MemoryAccess createAccessMetadata(const llvm::Instruction &inst) {
+  assert(llvm::isa<llvm::LoadInst>(inst) || llvm::isa<llvm::StoreInst>(inst));
+  const bool is_a_load = llvm::isa<llvm::LoadInst>(inst);
+
+  Statement::Access access =
+      is_a_load ? Statement::Access::Read : Statement::Access::Write;
+
+  const llvm::Value *ptr_value =
+      is_a_load ? llvm::cast<llvm::LoadInst>(inst).getPointerOperand()
+                : llvm::cast<llvm::StoreInst>(inst).getPointerOperand();
+
+  return Statement::MemoryAccess{
+      .access = access,
+      .pointer_operand = ptr_value,
+  };
 }
 } // namespace detail
 
-bool Statement::isStatementDivider(const llvm::Instruction &instr) {
-  return detail::dividerIndex(instr) != StatementTypes::length;
-}
-
-unique_ptr<Statement> Statement::create(unsigned index,
-                                        const StatementConfig &cfg) {
-  constexpr auto lut = detail::make_create_statement_lut(StatementTypes{});
-
-  return lut[index](cfg);
-}
-
-BarrierStatement::BarrierStatement(const StatementConfig &cfg)
-    : Base{cfg}, barrier_{
-                     detail::createBarrierMetadata(getDefiningInstruction())} {}
-
-bool BarrierStatement::isDivider(const llvm::Instruction &instr) {
-
-  auto as_fn = llvm::dyn_cast_or_null<llvm::CallInst>(&instr);
-
-  if (!as_fn)
-    return llvm::isa<llvm::ReturnInst>(instr);
-
-  if (const auto called_fn = as_fn->getCalledFunction()) {
-    return detail::warp_instructions.contains(called_fn->getName()) ||
-           detail::block_instructions.contains(called_fn->getName());
+bool is_a_barrier(const llvm::Instruction &inst) {
+  if (auto as_call = llvm::dyn_cast<llvm::CallInst>(&inst)) {
+    auto name = as_call->getCalledFunction()->getName();
+    return detail::block_instructions.contains(name) ||
+           detail::warp_instructions.contains(name);
   }
   return false;
 }
 
-MemoryAccessStatement::MemoryAccessStatement(const StatementConfig &cfg)
-    : Base{cfg} {}
-
-bool MemoryAccessStatement::isDivider(const llvm::Instruction &instr) {
-  return llvm::isa<llvm::StoreInst>(instr) || llvm::isa<llvm::LoadInst>(instr);
-}
-
-string_view MemoryAccessStatement::getSuffix() const {
-  switch (getAccessType()) {
-  case Access::Read:
-    return "LOAD";
-  case Access::Write:
-    return "STORE";
-  }
-  assert(false && "memory access should only be load or store");
-  return {};
-}
-
-const llvm::Value *MemoryAccessStatement::getAddressOperand() const {
-  switch (getAccessType()) {
-  case Access::Read:
-    return getDefiningInstruction().getOperand(0);
-  case Access::Write:
-    return getDefiningInstruction().getOperand(1);
-  }
-
-  assert(false);
-  return nullptr;
-}
-
-MemoryAccessStatement::Access MemoryAccessStatement::getAccessType() const {
-  if (auto as_store = llvm::dyn_cast_or_null<llvm::StoreInst>(
-          &this->getDefiningInstruction()))
-    return Access::Write;
-  if (auto as_load = llvm::dyn_cast_or_null<llvm::LoadInst>(
-          &this->getDefiningInstruction()))
-    return Access::Read;
-
-  assert(false && "memory access should only be load or store");
-  return {};
-}
-
-const llvm::Value *MemoryAccessStatement::getPointerOperand() const {
-  if (auto as_store = llvm::dyn_cast_or_null<llvm::StoreInst>(
-          &this->getDefiningInstruction()))
-    return as_store->getPointerOperand();
-  if (auto as_load = llvm::dyn_cast_or_null<llvm::LoadInst>(
-          &this->getDefiningInstruction()))
-    return as_load->getPointerOperand();
-
-  assert(false && "memory access should only be load or store");
-  return nullptr;
-}
-
-Statement::Statement(const StatementConfig &cfg)
-    : bb_{cfg.bb}, beg_{cfg.begin}, end_{cfg.end}, name{cfg.name} {
+Statement::Statement(string_view name, const_iterator begin, const_iterator end)
+    : beg_{begin}, end_{end}, name{name} {
   assert((beg_ != end_) && "No trivial statements");
-  auto b = cfg.begin;
-  auto e = cfg.end;
-  for (last_ = b++; b != e; ++last_, ++b)
+  auto b = begin;
+  auto e = end;
+
+  for (last_ = b++; b != end; ++b, ++last_)
     ;
+
+  for (auto i = begin; i != end; ++i) {
+    switch (i->getOpcode()) {
+    case llvm::Instruction::Load:
+    case llvm::Instruction::Store:
+      accesses_.emplace_back(detail::createAccessMetadata(*i));
+      continue;
+    case llvm::Instruction::Call:
+      if (is_a_barrier(*i))
+        barrier_ = detail::createBarrierMetadata(*i);
+      continue;
+    case llvm::Instruction::Ret:
+      barrier_ = detail::createBarrierMetadata(*i);
+      continue;
+    default:
+      break;
+    }
+  }
 }
 
-void Statement::addSuccessor(unique_ptr<Statement> child) {
-  successor = std::move(child);
-}
-
-string Statement::getName() const { return string{getSuffix()} + ":" + name; }
-
-Statement *Statement::getSuccessor() const { return successor.get(); }
+string Statement::getName() const { return name; }
 
 } // namespace golly
