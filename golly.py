@@ -6,10 +6,14 @@ import os
 import uuid
 import argparse
 import tempfile
+import time
+from statistics import mean
 import yaml
 
 golly_path = "./build/lib/golly.so"
 golly_repair_path = "./build/barrier-repair/golly-repair"
+timings = {}
+profile = None
 
 class FuncDetection:
     def __init__(self, name, blockDim, gridDim):
@@ -90,7 +94,20 @@ def analysisPass(filename, workdir, patchFile, showWarnings, clangArgs, verbose,
 
     assert file.exists()
 
-    analyze(file, patchFile=patchFile, config=config, verbose=verbose)
+    durs = []
+    for i in range(kwargs['iters']):
+        start = time.perf_counter()
+        analyze(file, patchFile=patchFile, config=config, verbose=verbose)
+        end = time.perf_counter()
+        dur = end - start
+        durs.append(dur)
+
+    timings[str(filename)] = {
+        'times': durs,
+        'min': min(durs),
+        'max': max(durs),
+        'avg': mean(durs)
+    }
 
 def raceDetected(patchFile: path.Path) -> bool:
     return patchFile.exists() and patchFile.stat().st_size > 2
@@ -140,6 +157,17 @@ if __name__ == "__main__":
         help="Shows warnings from clang (suppressed otherwise)",
         action="store_true",
     )
+    parser.add_argument(
+        "--iters",
+        help="Executes multiple times for profiling",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "--profile",
+        help="Profiles the analysis",
+        type=path.Path
+    )
     
     parser.add_argument(
         "--repair",
@@ -151,6 +179,8 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", "-v", action="store_true", default=False)
 
     args = parser.parse_args()
+
+    profile = args.profile
 
 
     if args.filename.suffix == ".yaml":
@@ -169,6 +199,9 @@ if __name__ == "__main__":
                 patchFile=f"{workdir}/pairs.out"
                 analysisPass(workdir=workdir, patchFile=patchFile, config=configFile, **dict(vars(args), filename=path.Path(f"{dir}/{f}")))
                 print("\n")
+            if profile is not None:
+                with open(profile, "w") as outFile:
+                    outFile.write(yaml.dump(timings))
 
     else:
         workdir = path.Path(f"{tempfile.gettempdir()}/golly/{uuid.uuid4()}")
