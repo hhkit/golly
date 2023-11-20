@@ -29,8 +29,8 @@ llvm::Expected<GollyOptions> parseOptions(llvm::StringRef params) {
           [](char c) -> bool { return c != EOF && c != ';'; });
       params.consume_front(token);
       if (params.consume_front(";") || params.empty())
-        continue;
-      options.errorLog = token.str();
+        options.errorLog = token.str();
+
       continue;
     }
 

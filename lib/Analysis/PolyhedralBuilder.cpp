@@ -535,6 +535,10 @@ struct PolyhedralBuilder {
     auto [beta, errs] = constructValidBarriers(
         thd_exprs, domain, thread_allocation, temporal_schedule);
 
+    // early terminate if barrier divergence is detected
+    if (errs)
+      return {union_map{"{}"}, errs};
+
     auto tid_to_stmt_inst =
         reverse(domain_intersect(thread_allocation, range(domain)));
 

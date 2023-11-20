@@ -2,6 +2,7 @@
 #include "golly/Analysis/Statements.h"
 
 #include <fstream>
+#include <iostream>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/DebugLoc.h>
 #include <ryml.hpp>
@@ -63,9 +64,51 @@ void dumpYaml(const ErrorList &errs, std::filesystem::path yaml_out) {
       add_loc(locs.append_child(), write_dbg_loc);
       add_loc(locs.append_child(), acc_dbg_loc);
     }
-  }
 
-  std::ofstream out{yaml_out};
-  out << tree;
+    if (auto bd = std::get_if<golly::BarrierDivergence>(&err)) {
+      auto err = root.append_child();
+      err |= ryml::MAP;
+      err["type"] = "bd";
+
+      auto level = err["level"];
+      switch (bd->level) {
+      case Level::Grid:
+        level << "grid";
+        break;
+      case Level::Block:
+        level << "block";
+        break;
+      case Level::Warp:
+        level << "warp";
+        break;
+      }
+
+      // auto loc = err["locs"];
+      // loc |= ryml::SEQ;
+
+      // auto &write_dbg_loc = getLoc(bd-);
+      // auto add_loc = [](ryml::NodeRef store, const llvm::DILocation &dbg) {
+      //   constexpr auto canonicalize =
+      //       [](const llvm::DILocation &dbg) -> fs::path {
+      //     return fs::canonical(fs::path{dbg.getDirectory().str()} /
+      //                          fs::path{dbg.getFilename().str()});
+      //   };
+
+      //   auto path = canonicalize(dbg).string();
+      //   auto line = dbg.getLine();
+      //   auto col = dbg.getColumn();
+
+      //   store |= ryml::MAP;
+      //   store["path"] << path;
+      //   store["line"] << line;
+      //   store["col"] << col;
+      // };
+    }
+  }
+  // llvm::dbgs() << std::string{"writing"} << "\n";
+  if (auto out = std::ofstream{yaml_out}) {
+    out << tree;
+    // llvm::dbgs() << "wrote to " << yaml_out << "\n";
+  }
 }
 } // namespace golly

@@ -81,16 +81,14 @@ PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
   if (auto errs = fam.getResult<golly::RaceDetector>(f)) {
     if (options->errorLog) {
       dumpYaml(errs, *options->errorLog);
-    } else {
-      llvm::outs() << "\n";
-      for (auto &elem : errs) {
-        llvm::WithColor(llvm::outs(), llvm::raw_ostream::RED, true)
-            << "ERROR: ";
-        elem.print(
-            llvm::WithColor(llvm::outs(), llvm::HighlightColor::Warning));
-        llvm::outs() << " detected\n";
-      }
     }
+    llvm::outs() << "\n";
+    for (auto &elem : errs) {
+      llvm::WithColor(llvm::outs(), llvm::raw_ostream::RED, true) << "ERROR: ";
+      elem.print(llvm::WithColor(llvm::outs(), llvm::HighlightColor::Warning));
+      llvm::outs() << " detected\n";
+    }
+
   } else
     llvm::WithColor(llvm::outs(), llvm::raw_ostream::GREEN, true) << "Clear!\n";
   return PreservedAnalyses::all();
