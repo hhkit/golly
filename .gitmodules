@@ -23,5 +23,8 @@
 	path = tests/GkleeTests
 	url = https://github.com/Geof23/GkleeTests
 [submodule "tests/simulee/arrayfire"]
-	path = tests/simulee/arrayfire
+	path = tests/simulee/arrayfire-d7abcf2358e
+	url = https://github.com/arrayfire/arrayfire
+[submodule "tests/simulee/arrayfire-a515b112076"]
+	path = tests/simulee/arrayfire-a515b112076
 	url = https://github.com/arrayfire/arrayfire
