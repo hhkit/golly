@@ -8,8 +8,6 @@
 #include "golly/Support/ConditionalVisitor.h"
 #include "golly/Support/isl_llvm.h"
 
-#include <fmt/format.h>
-
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/Operator.h>
 #include <llvm/Support/FormatVariadic.h>
@@ -364,10 +362,10 @@ struct PolyhedralBuilder {
           // llvm::dbgs() << "insts: " << stmt_instances << "\n";
 
           if (is_empty(stmt_instances)) {
-            llvm::outs() << "warning: unreachable barrier\n"
-                         << (*barrier->instr).getDebugLoc().get() << "\n";
+            errs.emplace_back(UnreachableBarrier{.barrier = &stmt});
             continue;
           }
+
           auto time_map =
               apply_range(identity(stmt_instances), temporal_schedule);
 

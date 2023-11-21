@@ -4,9 +4,6 @@
 [submodule "tests/simulee/kaldi"]
 	path = tests/simulee/kaldi
 	url = https://github.com/kaldi-asr/kaldi
-[submodule "tests/simulee/arrayfire"]
-	path = tests/simulee/arrayfire
-	url = https://github.com/arrayfire/arrayfire
 [submodule "tests/simulee/thundersvm"]
 	path = tests/simulee/thundersvm
 	url = https://github.com/Xtra-Computing/thundersvm
@@ -25,3 +22,6 @@
 [submodule "tests/GkleeTests"]
 	path = tests/GkleeTests
 	url = https://github.com/Geof23/GkleeTests
+[submodule "tests/simulee/arrayfire"]
+	path = tests/simulee/arrayfire
+	url = https://github.com/arrayfire/arrayfire
