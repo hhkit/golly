@@ -205,18 +205,17 @@ struct PolyhedralBuilder {
         auto zero = param.constant<pw_aff>(0);
         auto one = param.constant<pw_aff>(1);
 
-        auto true_set = eq_set(val, zero);
-        auto false_set = eq_set(val, one);
+        auto true_set = gt_set(val, zero);
         for (auto &bb : cda.getTrueBranch(br)) {
           auto &dom = domains[bb];
           auto diff = dims(dom, dim::set) - br_dims;
-          dom = ISLPP_CHECK(add_dims(true_set, dim::set, diff) * dom);
+          // dom = ISLPP_CHECK(add_dims(true_set, dim::set, diff) * dom);
         }
 
         for (auto &bb : cda.getFalseBranch(br)) {
           auto &dom = domains[bb];
           auto diff = dims(dom, dim::set) - br_dims;
-          dom = ISLPP_CHECK(dom - add_dims(true_set, dim::set, diff));
+          // dom = ISLPP_CHECK(dom - add_dims(true_set, dim::set, diff));
         }
       }
     }
