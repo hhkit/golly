@@ -9,7 +9,6 @@
 #include "golly/Support/GollyOptions.h"
 #include "golly/golly.h"
 #include <filesystem>
-#include <fmt/format.h>
 
 #include <llvm/Support/CommandLine.h>
 

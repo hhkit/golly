@@ -103,7 +103,11 @@ struct ScevAffinator
 
       // get loop index in context
       auto pos = context.getIVarIndex(indvar);
-      assert(pos >= 0);
+      // llvm::dbgs() << *indvar << "\n";
+      // context.dump(llvm::dbgs());
+
+      if (pos < 0) // indvar does not have affine bounds
+        return llvm::None;
 
       auto loop_expr = ISLPP_CHECK(sp.coeff<pw_aff>(dim::in, pos, 1));
       return ISLPP_CHECK(loop_expr * *step);

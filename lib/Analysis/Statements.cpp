@@ -87,11 +87,14 @@ Statement::Statement(string_view name, const_iterator begin, const_iterator end)
       accesses_.emplace_back(detail::createAccessMetadata(*i));
       continue;
     case llvm::Instruction::Call:
-      if (is_a_barrier(*i))
+      if (is_a_barrier(*i)) {
         barrier_ = detail::createBarrierMetadata(*i);
+        barrier_->instr = &llvm::cast<llvm::CallInst>(*i);
+      }
       continue;
     case llvm::Instruction::Ret:
       barrier_ = detail::createBarrierMetadata(*i);
+      barrier_->instr = &llvm::cast<llvm::ReturnInst>(*i);
       continue;
     default:
       break;

@@ -409,6 +409,12 @@ int golly::AffineContext::getIVarIndex(const llvm::Value *ptr) const {
   return -1;
 }
 void golly::AffineContext::dump(llvm::raw_ostream &os) const {
-  for (auto &iv : induction_vars)
-    os << "iv[" << getIVarIndex(iv.value) << "]: " << *iv.value << "\n";
+  for (auto &iv : induction_vars) {
+    os << "iv[" << getIVarIndex(iv.value) << "]: ";
+    if (iv.value)
+      os << *iv.value;
+    else
+      os << "(nil)";
+    os << "\n";
+  }
 }

@@ -66,7 +66,6 @@ llvm::Optional<GollyOptions> RunGollyPass::getOptions() { return options; }
 golly::RunGollyPass::RunGollyPass(GollyOptions &opt) { options = opt; }
 
 PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
-
   if (f.getName() == "_Z10__syncwarpj") {
     return PreservedAnalyses::none();
   }
@@ -79,18 +78,20 @@ PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
   llvm::outs() << " using " << params << ": ";
 
   if (auto errs = fam.getResult<golly::RaceDetector>(f)) {
-    if (options->errorLog) {
+    if (options->errorLog)
       dumpYaml(errs, *options->errorLog);
-    }
+
     llvm::outs() << "\n";
     for (auto &elem : errs) {
-      llvm::WithColor(llvm::outs(), llvm::raw_ostream::RED, true) << "ERROR: ";
+      llvm::WithColor(llvm::outs(), llvm::HighlightColor::Error) << "ERROR: ";
       elem.print(llvm::WithColor(llvm::outs(), llvm::HighlightColor::Warning));
-      llvm::outs() << " detected\n";
+      llvm::outs() << " detected "
+                      "\n";
     }
 
   } else
     llvm::WithColor(llvm::outs(), llvm::raw_ostream::GREEN, true) << "Clear!\n";
+
   return PreservedAnalyses::all();
 }
 } // namespace golly
@@ -127,8 +128,9 @@ llvm::PassPluginLibraryInfo getGollyPluginInfo() {
               if (golly::detail::checkParametrizedPassName(Name, "golly")) {
                 auto Params = golly::detail::parsePassParameters(
                     golly::parseOptions, Name, "golly");
-                if (!Params)
+                if (!Params) {
                   return false;
+                }
                 PM.addPass(golly::RunGollyPass(Params.get()));
                 return true;
               }

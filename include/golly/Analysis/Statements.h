@@ -36,7 +36,7 @@ public:
     using Base = std::variant<Warp, Block, End>;
     using Base::Base;
 
-    llvm::CallInst *instr;
+    const llvm::Instruction *instr{};
   };
 
   enum class Access { Read, Write };

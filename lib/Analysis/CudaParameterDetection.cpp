@@ -2,10 +2,10 @@
 #include "golly/Support/GollyOptions.h"
 #include "golly/golly.h"
 #include <charconv>
-#include <fmt/format.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <variant>
 
 #define DEBUG_TYPE "golly-verbose"
@@ -209,18 +209,21 @@ CudaParameters CudaParameters::Builder::build() {
 }
 
 void CudaParameters::dump(llvm::raw_ostream &os) const {
-  std::vector<int> grid_dims;
-  std::vector<int> block_dims;
+  bool first = true;
+  os << "gridDims: ";
   for (auto [dim, count] : dim_count)
-    if (is_grid_dim(dim))
-      grid_dims.emplace_back(count);
-
+    if (is_grid_dim(dim)) {
+      os << (first ? "[" : ",") << count;
+      first = false;
+    }
+  os << "], blockDims: ";
+  first = true;
   for (auto [dim, count] : dim_count)
-    if (!is_grid_dim(dim))
-      block_dims.emplace_back(count);
-
-  os << fmt::format("gridDims: [{}], blockDims: [{}]",
-                    fmt::join(grid_dims, ","), fmt::join(block_dims, ","));
+    if (!is_grid_dim(dim)) {
+      os << (first ? "[" : ",") << count;
+      first = false;
+    }
+  os << "]";
 
   LLVM_DEBUG(
       for (auto [instr, intrin]
@@ -233,7 +236,7 @@ void CudaParameters::dump(llvm::raw_ostream &os) const {
 
       if (finalized) {
         for (auto [intrin, index] : cached_dim_index)
-          os << fmt::format("[{0}] : {1}", index, getAlias(intrin)) << "\n";
+          os << llvm::formatv("[{0}] : {1}", index, getAlias(intrin)) << "\n";
       });
 }
 

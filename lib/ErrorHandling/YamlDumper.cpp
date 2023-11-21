@@ -106,7 +106,7 @@ void dumpYaml(const ErrorList &errs, std::filesystem::path yaml_out) {
     }
   }
   // llvm::dbgs() << std::string{"writing"} << "\n";
-  if (auto out = std::ofstream{yaml_out}) {
+  if (auto out = std::ofstream{yaml_out, std::fstream::app}) {
     out << tree;
     // llvm::dbgs() << "wrote to " << yaml_out << "\n";
   }

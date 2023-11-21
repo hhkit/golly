@@ -27,7 +27,7 @@ def compile(
     filename: path.Path, workdir: path.Path, showWarnings: bool, clangArgs: [] = None
 ):
     workdir.mkdir(parents=True, exist_ok=True)
-    sp.run(
+    cmd = (
         [
             "clang",
             "-g",
@@ -38,19 +38,25 @@ def compile(
             "-Xclang",
             "-disable-O0-optnone",
             "-DPOLYBENCH_USE_SCALAR_LB",
-            filename.resolve(),
         ]
         + ["" if showWarnings else "-w"]
-        + (clangArgs if clangArgs is not None else []),
-        cwd=workdir.resolve(),
+        + (clangArgs if clangArgs is not None else [])
+        + [str(filename.resolve())]
     )
+    # print(" ".join(cmd))
+    sp.run(cmd, cwd=workdir.resolve())
 
 
-def canonicalize(outfile: io.TextIOWrapper, workdir: path.Path):
+def canonicalize(
+    outfile: io.TextIOWrapper, workdir: path.Path, infile: path.Path = None
+):
+    workdir.mkdir(parents=True, exist_ok=True)
     # find the ptx ll
-    ll = next(
-        path for path in workdir.iterdir() if path.stem.find("nvptx64-nvidia") != -1
-    )
+    ll = infile
+    if infile is None:
+        ll = next(
+            path for path in workdir.iterdir() if path.stem.find("nvptx64-nvidia") != -1
+        )
     (out,) = (
         sp.Popen(
             ["opt", "-early-cse", "--polly-canonicalize", ll.resolve()],
@@ -100,6 +106,7 @@ def analysisPass(
     config: path.Path = None,
     **kwargs,
 ):
+    workdir.mkdir(parents=True, exist_ok=True)
     file = filename
     if file.suffix == ".cu":
         # compile and canonicalize
@@ -109,6 +116,11 @@ def analysisPass(
         with open(ll_file, "w") as out_ll:
             canonicalize(out_ll, workdir)
 
+        file = ll_file
+    if file.suffix == ".ll":
+        ll_file = file.with_suffix(".canon.ll")
+        with open(ll_file, "w") as out_ll:
+            canonicalize(out_ll, workdir, file)
         file = ll_file
 
     assert file.exists()

@@ -15,6 +15,10 @@ static std::string_view print_level(Level level) {
   return "";
 }
 
+llvm::raw_ostream &UnreachableBarrier::print(llvm::raw_ostream &os) const {
+  return os << "unreachable barrier";
+}
+
 llvm::raw_ostream &BarrierDivergence::print(llvm::raw_ostream &os) const {
   return os << print_level(level) << " barrier divergence";
 }
