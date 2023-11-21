@@ -18,4 +18,4 @@ add_llvm_pass_plugin(golly MODULE
     Support/isl.cpp
     Support/isl_llvm.cpp)
 target_compile_features(golly PRIVATE cxx_std_20)
-target_link_libraries(golly PRIVATE ${ISL_TARGET} fmt::fmt ryml::ryml)
+target_link_libraries(golly PRIVATE ${ISL_TARGET} ryml::ryml)

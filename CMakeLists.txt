@@ -22,16 +22,12 @@ list(INSERT CMAKE_MODULE_PATH 0
 # other libraries
 find_package(ISL)
 
-FetchContent_Declare(fmt
-  GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-  GIT_TAG a0b8a92e3d1532361c2f7feb63babc5c18d00ef2 # 10.0
-  )
 FetchContent_Declare(ryml
     GIT_REPOSITORY https://github.com/biojppm/rapidyaml.git
     GIT_TAG ${RYML_BRANCH_NAME}
     GIT_SHALLOW FALSE  # ensure submodules are checked out
   )
-FetchContent_MakeAvailable(fmt ryml)
+FetchContent_MakeAvailable(ryml)
 
 include_directories(${LLVM_INCLUDE_DIRS} ${ISL_INCLUDE_DIRS} include)
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})

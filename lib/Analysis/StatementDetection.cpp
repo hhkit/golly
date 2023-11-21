@@ -1,4 +1,3 @@
-#include <fmt/format.h>
 #include <golly/Analysis/StatementDetection.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/IR/CFG.h>
@@ -24,7 +23,7 @@ constexpr auto divider_lut = std::array{
     +[](const llvm::Instruction &instr) -> bool { return is_a_barrier(instr); },
 };
 
-static int speed = 1;
+static int speed = 0;
 
 static std::vector<Statement> build(const BasicBlock &bb) {
   std::vector<Statement> statements;
