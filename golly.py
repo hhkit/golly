@@ -62,7 +62,7 @@ def canonicalize(
         )
     (out,) = (
         sp.Popen(
-            ["opt", "-early-cse", "--polly-canonicalize", "-inline", "-inline-threshold=10000", ll.resolve()],
+            ["opt", "-early-cse", "--polly-canonicalize", "-inline", "-inline-threshold=10000", "-mergereturn", ll.resolve()],
             cwd=workdir.resolve(),
             stdout=sp.PIPE,
         ),
