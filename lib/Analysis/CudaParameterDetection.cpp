@@ -12,6 +12,10 @@
 
 namespace golly {
 
+enum AddressSpace {
+  SharedMemory = 3,
+};
+
 using llvm::StringMap;
 
 bool is_grid_dim(Dimension d) { return d <= Dimension::ctaZ; }
@@ -144,10 +148,9 @@ struct IntrinsicFinder : llvm::InstVisitor<IntrinsicFinder> {
   }
 
   void visitGetElementPtr(llvm::GetElementPtrInst &inst) {
-    auto ptr_operand = inst.getPointerOperand();
-    if (llvm::dyn_cast<llvm::GlobalValue>(ptr_operand)) {
-      builder.addSharedMemoryPtr(ptr_operand);
-    }
+    // auto ptr_operand = inst.getPointerOperand();
+    if (inst.getPointerAddressSpace() == AddressSpace::SharedMemory)
+      builder.addSharedMemoryPtr(inst.getPointerOperand());
   }
 };
 
@@ -249,6 +252,7 @@ AnalysisKey CudaParameterDetection::Key;
 
 CudaParameterDetection::Result
 CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
+
   CudaParameters::Builder b;
 
   for (auto &global : f.getParent()->getGlobalList()) {

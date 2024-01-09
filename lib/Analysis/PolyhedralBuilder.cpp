@@ -413,6 +413,12 @@ struct PolyhedralBuilder {
                   .barrier = &stmt,
                   .level = Level::Warp,
               });
+
+              // attempt to calculate maximum warps not in barrier
+              auto dont_wait_for = set{"{[i] | 0 <= i < 32}"} - s;
+              auto non_waiting_beta_lanes =
+                  universal(domain(beta_warps), union_set(dont_wait_for));
+
               continue;
             }
 
@@ -572,7 +578,7 @@ struct PolyhedralBuilder {
     auto sync_times = lexmin(
         apply_range(range_factor_range(barrs_over_stmts), temporal_schedule));
 
-    return {sync_times, errs};
+    return {coalesce(sync_times), errs};
   }
 
   std::pair<union_map, union_map> calculateAccessRelations(union_map domain) {
@@ -633,7 +639,7 @@ struct PolyhedralBuilder {
 
     reads = domain_intersect(reads, range(domain));
     writes = domain_intersect(writes, range(domain));
-    return {reads, writes};
+    return {coalesce(reads), coalesce(writes)};
   }
 };
 

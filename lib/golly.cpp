@@ -66,6 +66,11 @@ llvm::Optional<GollyOptions> RunGollyPass::getOptions() { return options; }
 golly::RunGollyPass::RunGollyPass(GollyOptions &opt) { options = opt; }
 
 PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
+  // global functions cannot recurse
+  if (f.hasFnAttribute(llvm::Attribute::AttrKind::NoRecurse) == false) {
+    return {};
+  }
+
   if (f.getName() == "_Z10__syncwarpj") {
     return PreservedAnalyses::none();
   }

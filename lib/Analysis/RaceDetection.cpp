@@ -90,7 +90,10 @@ ErrorList RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   bool has_conflicts = !is_empty(conflicting_syncs);
 
   // comment out to reduce strictness
-  has_conflicts &= islpp::dims(conflicting_syncs, islpp::dim::param) == 0;
+  if (auto opts = RunGollyPass::getOptions(); !opts || opts->strict)
+    has_conflicts &= islpp::dims(conflicting_syncs, islpp::dim::param) == 0;
+  else
+    llvm::dbgs() << "relaxing restrictions";
 
   if (has_conflicts) {
     const auto &stmt_info = fam.getResult<golly::StatementDetectionPass>(f);

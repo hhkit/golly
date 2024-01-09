@@ -27,6 +27,7 @@ def compile(
     filename: path.Path, workdir: path.Path, showWarnings: bool, clangArgs: [] = None
 ):
     workdir.mkdir(parents=True, exist_ok=True)
+    print(f"workdir: {workdir}")
     cmd = (
         [
             "clang",
@@ -35,8 +36,10 @@ def compile(
             "-S",
             "-emit-llvm",
             "--cuda-gpu-arch=sm_60",
-            "-Xclang",
-            "-disable-O0-optnone",
+            "-O1",
+            # "-Xclang", "-disable-O0-optnone",
+            "-Xclang", "-disable-llvm-passes",
+            "-Xclang", "-finline-functions",
             "-DPOLYBENCH_USE_SCALAR_LB",
         ]
         + ["" if showWarnings else "-w"]
@@ -59,7 +62,7 @@ def canonicalize(
         )
     (out,) = (
         sp.Popen(
-            ["opt", "-early-cse", "--polly-canonicalize", ll.resolve()],
+            ["opt", "-early-cse", "--polly-canonicalize", "-inline", "-inline-threshold=10000", ll.resolve()],
             cwd=workdir.resolve(),
             stdout=sp.PIPE,
         ),
@@ -69,7 +72,13 @@ def canonicalize(
     asm.wait()
 
 
-def analyze(file: path.Path, patchFile: path.Path, config: path.Path, verbose: bool):
+def analyze(
+    file: path.Path,
+    patchFile: path.Path,
+    config: path.Path,
+    verbose: bool,
+    relaxed: bool,
+):
     options = {}
     if config is not None:
         options["config"] = config
@@ -77,6 +86,8 @@ def analyze(file: path.Path, patchFile: path.Path, config: path.Path, verbose: b
         options["outfile"] = patchFile
     if verbose:
         options["verbose"] = None
+    if relaxed:
+        options["relaxed"] = None
 
     optionStr = (
         f"<{';'.join(f'{k}={v}' if v is not None else f'{k}' for k,v in options.items())}>"
@@ -128,11 +139,17 @@ def analysisPass(
     durs = []
     for i in range(kwargs["iters"]):
         start = time.perf_counter()
-        analyze(file, patchFile=patchFile, config=config, verbose=verbose)
+        analyze(
+            file,
+            patchFile=patchFile,
+            config=config,
+            verbose=verbose,
+            relaxed=bool(kwargs.get("relax", False)),
+        )
         end = time.perf_counter()
         dur = end - start
         durs.append(dur)
-    print(patchFile)
+    # print(patchFile)
     err = "-"
     try:
         with open(patchFile) as errfile:
@@ -218,7 +235,11 @@ if __name__ == "__main__":
         default=1,
     )
     parser.add_argument("--profile", help="Profiles the analysis", type=path.Path)
-
+    parser.add_argument(
+        "--relax",
+        help="Relax the strict requirements of the race detector. Detects more races at the cost of the potential for false positives.",
+        action="store_true",
+    )
     parser.add_argument(
         "--repair",
         "-r",

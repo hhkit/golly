@@ -80,6 +80,12 @@ llvm::Expected<GollyOptions> parseOptions(llvm::StringRef params) {
         continue;
       }
     }
+    if (params.consume_front("relaxed")) {
+      if (params.consume_front(";") || params.empty()) {
+        options.strict = false;
+        continue;
+      }
+    }
     return llvm::make_error<llvm::StringError>(
         llvm::formatv("not implemented").str(), llvm::inconvertibleErrorCode());
   }
