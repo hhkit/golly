@@ -95,10 +95,20 @@
     "stack": "cpp",
     "*.def": "cpp",
     "__std_stream": "cpp",
-    "regex": "cpp"
+    "regex": "cpp",
+    "*.inc": "cpp",
+    "hash_map": "cpp",
+    "hash_set": "cpp",
+    "csignal": "cpp",
+    "future": "cpp",
+    "cfenv": "cpp",
+    "csetjmp": "cpp",
+    "forward_list": "cpp",
+    "valarray": "cpp"
   },
   "C/C++ Include Guard.Macro Type": "Filepath",
   "C/C++ Include Guard.Suffix": "_H",
   "C/C++ Include Guard.Path Skip": 1,
   "editor.formatOnSave": true,
+  "cmake.configureOnOpen": true,
 }
