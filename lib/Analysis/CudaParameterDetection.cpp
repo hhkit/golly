@@ -269,9 +269,9 @@ CudaParameterDetection::run(Function &f, FunctionAnalysisManager &am) {
   auto ptr = ([&]() -> golly::GollyOptions::Params * {
     if (!opt)
       return nullptr;
-    for (auto &elem : opt->function_parameters)
-      if (name.contains(elem.getKey()))
-        return &elem.getValue();
+    for (auto &Elem : opt->function_parameters)
+      if (name.contains(Elem.getKey()))
+        return &Elem.getValue();
 
     return nullptr;
   })();

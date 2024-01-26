@@ -6,6 +6,7 @@
 #include "golly/Analysis/SccOrdering.h"
 #include "golly/Analysis/StatementDetection.h"
 #include "golly/Support/ConditionalVisitor.h"
+#include "golly/Support/isl.h"
 #include "golly/Support/isl_llvm.h"
 
 #include <llvm/Demangle/Demangle.h>
@@ -581,9 +582,11 @@ struct PolyhedralBuilder {
     return {coalesce(sync_times), errs};
   }
 
-  std::pair<union_map, union_map> calculateAccessRelations(union_map domain) {
+  std::tuple<union_map, union_map, union_map>
+  calculateAccessRelations(union_map domain) {
     union_map reads{"{}"};
     union_map writes{"{}"};
+    union_map atomics{"{}"};
 
     auto get_cta = [&](space sp) -> islpp::multi_aff {
       multi_aff expr = null_tuple(sp);
@@ -629,17 +632,25 @@ struct PolyhedralBuilder {
 
           auto as_map = name_expr(flat_range_product(ptr_expr, map{*scev}));
 
-          if (accesses.access == Statement::Access::Read)
+          switch (accesses.access) {
+          case Statement::Access::Read:
             reads = reads + union_map{as_map};
-          else
+            break;
+          case Statement::Access::Write:
             writes = writes + union_map{as_map};
+            break;
+          case Statement::Access::Atomic:
+            atomics = atomics + union_map{as_map};
+            break;
+          }
         }
       }
     });
 
     reads = domain_intersect(reads, range(domain));
     writes = domain_intersect(writes, range(domain));
-    return {coalesce(reads), coalesce(writes)};
+    atomics = domain_intersect(atomics, range(domain));
+    return {coalesce(reads), coalesce(writes), coalesce(atomics)};
   }
 };
 
@@ -662,7 +673,8 @@ Pscop PolyhedralBuilderPass::run(llvm::Function &f,
   const auto temporal_schedule = builder.constructTemporalSchedule(domain);
   const auto [sync_schedule, errors] = builder.constructSynchronizationSchedule(
       exprs, domain, thread_alloc, temporal_schedule);
-  const auto [reads, writes] = builder.calculateAccessRelations(domain);
+  const auto [reads, writes, atomics] =
+      builder.calculateAccessRelations(domain);
 
   return Pscop{
       .instantiation_domain = domain,
@@ -671,6 +683,7 @@ Pscop PolyhedralBuilderPass::run(llvm::Function &f,
       .sync_schedule = sync_schedule,
       .write_access_relation = writes,
       .read_access_relation = reads,
+      .atomic_access_relation = atomics,
 
       .thread_expressions = exprs,
       .errors = errors,

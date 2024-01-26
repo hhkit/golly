@@ -1,6 +1,7 @@
 
 #include "golly/Analysis/Statements.h"
 #include <array>
+#include <llvm-14/llvm/IR/Instruction.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/Debug.h>
@@ -60,6 +61,15 @@ Statement::MemoryAccess createAccessMetadata(const llvm::Instruction &inst) {
       .pointer_operand = ptr_value,
   };
 }
+
+Statement::MemoryAccess createAccessMetadata(const llvm::AtomicRMWInst &inst) {
+  const llvm::Value *ptr_value = inst.getPointerOperand();
+
+  return Statement::MemoryAccess{
+      .access = Statement::Access::Atomic,
+      .pointer_operand = ptr_value,
+  };
+}
 } // namespace detail
 
 bool is_a_barrier(const llvm::Instruction &inst) {
@@ -85,6 +95,10 @@ Statement::Statement(string_view name, const_iterator begin, const_iterator end)
     case llvm::Instruction::Load:
     case llvm::Instruction::Store:
       accesses_.emplace_back(detail::createAccessMetadata(*i));
+      continue;
+    case llvm::Instruction::AtomicRMW:
+      accesses_.emplace_back(
+          detail::createAccessMetadata(llvm::cast<llvm::AtomicRMWInst>(*i)));
       continue;
     case llvm::Instruction::Call:
       if (is_a_barrier(*i)) {

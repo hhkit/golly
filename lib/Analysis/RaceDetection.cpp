@@ -27,65 +27,15 @@ ErrorList RaceDetector::run(Function &f, FunctionAnalysisManager &fam) {
   if (auto opts = RunGollyPass::getOptions(); opts && opts->verboseLog)
     llvm::dbgs() << pscop << "\n";
 
-  auto tid_to_stmt_inst = reverse(pscop.thread_allocation);
+  auto race_check = may_happen_in_parallel(pscop, pscop.write_access_relation,
+                                           pscop.write_access_relation +
+                                               pscop.read_access_relation);
 
-  // this is Chatarasi's MHP relation, adapted to accommodate thread pairs
+  auto atomic_race_check = may_happen_in_parallel(
+      pscop, pscop.atomic_access_relation,
+      pscop.write_access_relation + pscop.read_access_relation);
 
-  auto &sync_times = pscop.sync_schedule;
-
-  // enumerate all thread pairs
-  auto threads = range(pscop.thread_allocation);
-  auto thread_pairs = universal(threads, threads) - identity(threads);
-
-  // [S -> T] -> StmtInsts of S and T
-  auto dmn_insts = apply_range(domain_map(thread_pairs),
-                               tid_to_stmt_inst) + // [ S -> T ] -> StmtInsts(S)
-                   apply_range(range_map(thread_pairs),
-                               tid_to_stmt_inst); // [ S -> T ] -> StmtInsts(T)
-
-  auto same_range = wrap(identity(range(pscop.temporal_schedule)));
-
-  // WriteInst -> AccessInst on the same variables
-  auto writes_to_accesses =
-      apply_range(pscop.write_access_relation, // StmtInst -> Memory
-                  reverse(pscop.read_access_relation +
-                          pscop.write_access_relation)); // Memory -> StmtInst
-
-  // ensure they are on different threads
-  // [S->T] -> [SWriteInst -> TAccessInst]
-  auto threads_to_wa = domain_intersect(
-      reverse(range_product(
-          apply_range(domain_map(writes_to_accesses), pscop.thread_allocation),
-          apply_range(range_map(writes_to_accesses), pscop.thread_allocation))),
-      wrap(thread_pairs));
-
-  auto conflicting_syncs = ([&]() {
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> [S->T]
-    const auto thread_pairs = domain_map(threads_to_wa);
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> [SWriteInst -> TAccessInst]
-    const auto inst_pairs = range_map(threads_to_wa);
-
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> SWriteInst
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> [[S->T] -> SWriteInst]
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> SyncTimeS
-    const auto writeinsts = range_factor_domain(inst_pairs);
-    const auto tiedwrites = range_product(thread_pairs, writeinsts);
-    const auto writetimes = apply_range(tiedwrites, sync_times);
-
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> TAccessInst
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> [[S->T] -> TAccessInst]
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> SyncTimeT
-    const auto accinsts = range_factor_range(inst_pairs);
-    const auto tiedaccs = range_product(thread_pairs, accinsts);
-    const auto acctimes = apply_range(tiedaccs, sync_times);
-
-    // [[S->T] -> [SWriteInst -> TAccessInst]] -> [SyncTimeS, SyncTimeT]
-    const auto syncs = range_product(writetimes, acctimes);
-
-    return range_intersect(syncs, same_range);
-  })();
-
-  conflicting_syncs = clean(conflicting_syncs);
+  auto conflicting_syncs = clean(race_check + atomic_race_check);
 
   bool has_conflicts = !is_empty(conflicting_syncs);
 

@@ -89,9 +89,7 @@ PreservedAnalyses RunGollyPass::run(Function &f, FunctionAnalysisManager &fam) {
     llvm::outs() << "\n";
     for (auto &elem : errs) {
       llvm::WithColor(llvm::outs(), llvm::HighlightColor::Error) << "ERROR: ";
-      elem.print(llvm::WithColor(llvm::outs(), llvm::HighlightColor::Warning));
-      llvm::outs() << " detected "
-                      "\n";
+      elem.print(llvm::outs());
     }
 
   } else

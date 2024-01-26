@@ -45,14 +45,25 @@ struct Pscop {
 
   islpp::union_map sync_schedule; // { { tid -> tid } -> StmtInst }
 
-  islpp::union_map write_access_relation; // param -> { StmtInst -> Access }
-  islpp::union_map read_access_relation;  // param -> { StmtInst -> Access }
+  islpp::union_map write_access_relation;  // param -> { StmtInst -> Access }
+  islpp::union_map read_access_relation;   // param -> { StmtInst -> Access }
+  islpp::union_map atomic_access_relation; // param -> { StmtInst -> Access }
+
+  islpp::union_map atomic_scope; // { StmtInst -> Scope }
 
   // dependence relation irrelevant for race detection
 
   ThreadExpressions thread_expressions;
   ErrorList errors;
 };
+
+/*
+ * MHP, similar to what is in Chatarasi's paper,
+ * except in GPU synchronization is pair-wise
+ */
+islpp::union_map may_happen_in_parallel(const Pscop &pscop,
+                                        islpp::union_map lhs,
+                                        islpp::union_map rhs);
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Pscop &);
 } // namespace golly

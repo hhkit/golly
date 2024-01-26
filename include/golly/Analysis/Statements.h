@@ -39,7 +39,7 @@ public:
     const llvm::Instruction *instr{};
   };
 
-  enum class Access { Read, Write };
+  enum class Access { Read, Write, Atomic };
   struct MemoryAccess {
     Access access;
     const llvm::Value *pointer_operand;
