@@ -10,6 +10,7 @@
 #include <map>
 #include <span>
 #include <string_view>
+#include <variant>
 
 namespace golly {
 
@@ -43,7 +44,35 @@ enum class Dimension : short {
   threadZ,
 };
 
+enum class ThreadScope : short {
+  block,
+  device,
+  system,
+};
+
+enum class AtomicType : short {
+  rmw,
+  cas,
+};
+
 bool is_grid_dim(Dimension);
+
+struct ThreadId {
+  Dimension dim;
+};
+
+struct ThreadCount {
+  Dimension dim;
+};
+
+struct Atomic {
+  ThreadScope scope;
+  AtomicType type;
+  llvm::Value *change;
+  llvm::Value *read_val;
+};
+
+// using Intrinsic = std::variant<ThreadId, ThreadCount, Atomic>;
 
 struct Intrinsic {
   Dimension dim;

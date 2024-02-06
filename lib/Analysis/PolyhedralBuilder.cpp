@@ -180,6 +180,7 @@ struct PolyhedralBuilder {
       auto space = get_space(domains[br->getParent()]);
       auto br_dims = dims(space, dim::set);
       if (auto cond = detection.getBranchInfo(br)) {
+        // llvm::dbgs() << "listen!" << *br << "\n";
         auto true_set = ISLPP_CHECK(
             consolidate(br->getCondition(), se, space, loop_info->context));
         for (auto &bb : cda.getTrueBranch(br)) {

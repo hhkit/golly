@@ -5,6 +5,7 @@
 #include "golly/Support/ConditionalAtomizer.h"
 #include "golly/Support/ConditionalVisitor.h"
 
+#include <llvm-14/llvm/IR/Instructions.h>
 #include <llvm/ADT/SetOperations.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/RegionInfo.h>
@@ -141,6 +142,7 @@ struct ScevValidator : llvm::SCEVVisitor<ScevValidator, ExprClass> {
     // todo
     return ExprClass::Invalid;
   }
+
   RetVal visitUnknown(const llvm::SCEVUnknown *S) {
     const auto value = S->getValue();
 
@@ -154,9 +156,12 @@ struct ScevValidator : llvm::SCEVVisitor<ScevValidator, ExprClass> {
       return ExprClass::IVar;
 
     if (auto instr = llvm::dyn_cast<llvm::Instruction>(S->getValue())) {
+      llvm::dbgs() << "eh" << *S->getValue() << "\n";
       switch (instr->getOpcode()) {
       case llvm::BinaryOperator::SRem:
         return visitSRemInstruction(instr);
+      case llvm::BinaryOperator::URem:
+        return visitURemInstruction(instr);
       default:
         break;
       }
@@ -168,6 +173,18 @@ struct ScevValidator : llvm::SCEVVisitor<ScevValidator, ExprClass> {
     auto lhs = visit(se.getSCEV(instr->getOperand(0)));
     auto rhs = visit(se.getSCEV(instr->getOperand(1)));
 
+    // only modulo by a constant
+    if (rhs != ExprClass::Constant)
+      return ExprClass::Invalid;
+
+    return lhs;
+  }
+
+  RetVal visitURemInstruction(llvm::Instruction *instr) {
+    auto lhs = visit(se.getSCEV(instr->getOperand(0)));
+    auto rhs = visit(se.getSCEV(instr->getOperand(1)));
+
+    llvm::dbgs() << "validate\n";
     // only modulo by a constant
     if (rhs != ExprClass::Constant)
       return ExprClass::Invalid;
@@ -312,6 +329,9 @@ struct PscopDetection::Pimpl {
             .se = se,
             .context = context,
         };
+        // llvm::dbgs() << "test:\t" << *se.getSCEV(as_cmp->getOperand(0)) <<
+        // "\n"; llvm::dbgs() << "test:\t" << *se.getSCEV(as_cmp->getOperand(1))
+        // << "\n";
         if (validator.visit(se.getSCEV(as_cmp->getOperand(0))) !=
                 ExprClass::Invalid &&
             validator.visit(se.getSCEV(as_cmp->getOperand(1))) !=
@@ -323,6 +343,7 @@ struct PscopDetection::Pimpl {
         break;
       }
     }
+    llvm::dbgs() << "nonaff" << *atom << "\n";
     return ConditionalContext::AtomInfo{.is_affine = false};
   }
 

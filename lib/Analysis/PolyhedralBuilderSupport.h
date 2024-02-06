@@ -42,7 +42,14 @@ struct ScevAffinator
     return visit(S->getOperand());
   }
   RetVal visitTruncateExpr(const llvm::SCEVTruncateExpr *S) {
-    return visit(S->getOperand());
+    auto lhs = visit(S->getOperand());
+    if (!lhs)
+      return llvm::None;
+
+    auto lexpr = *lhs;
+    auto bits = S->getType()->getScalarSizeInBits();
+    auto rhs = domain_space(lexpr).constant<pw_aff>(1 << bits);
+    return (*lhs) % rhs;
   }
   RetVal visitZeroExtendExpr(const llvm::SCEVZeroExtendExpr *S) {
     return visit(S->getOperand());
@@ -137,6 +144,8 @@ struct ScevAffinator
       switch (instr->getOpcode()) {
       case llvm::BinaryOperator::SRem:
         return visitSRemInstruction(instr);
+      case llvm::BinaryOperator::URem:
+        return visitURemInstruction(instr);
       default:
         break;
       }
@@ -178,6 +187,19 @@ struct ScevAffinator
   RetVal visitSRemInstruction(llvm::Instruction *instr) {
     auto lhs = visit(se.getSCEV(instr->getOperand(0)));
     auto rhs = visit(se.getSCEV(instr->getOperand(1)));
+    llvm::dbgs() << "here!";
+    if (lhs && rhs) {
+      auto val = *lhs % *rhs;
+      if (islpp::getLastError())
+        return llvm::None;
+      return val;
+    } else
+      return llvm::None;
+  }
+  RetVal visitURemInstruction(llvm::Instruction *instr) {
+    auto lhs = visit(se.getSCEV(instr->getOperand(0)));
+    auto rhs = visit(se.getSCEV(instr->getOperand(1)));
+    llvm::dbgs() << "here!";
     if (lhs && rhs) {
       auto val = *lhs % *rhs;
       if (islpp::getLastError())

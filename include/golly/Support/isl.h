@@ -719,7 +719,7 @@ public:
 #define SPACE_OPS(TYPE) UN_PROP(TYPE, space, get_space, isl_##TYPE##_get_space);
 
 #define DOMAIN_SPACE(TYPE)                                                     \
-  UN_PROP(TYPE, space, domain, isl_##TYPE##_get_domain_space);
+  UN_PROP(TYPE, space, domain_space, isl_##TYPE##_get_domain_space);
 
 DIMS(space)
 DIMS(local_space)
@@ -839,7 +839,7 @@ inline space drop_dims(space sp, dim d, int first, int n) {
 inline multi_aff increment(multi_aff ma) {
   auto ret = ma;
 
-  auto incre = domain(ma).constant<islpp::aff>(1);
+  auto incre = domain_space(ma).constant<islpp::aff>(1);
   auto out = dims(ma, islpp::dim::out);
   auto last = islpp::aff{isl_multi_aff_get_aff(ma.get(), out - 1)};
   return islpp::multi_aff{
@@ -849,7 +849,7 @@ inline multi_aff increment(multi_aff ma) {
 inline multi_aff project_up(multi_aff ma) {
   auto added = multi_aff{
       isl_multi_aff_add_dims(ma.yield(), isl_dim_type::isl_dim_in, 1)};
-  auto ins = domain(added);
+  auto ins = domain_space(added);
   auto wcoeff = ins.coeff<multi_aff>(dim::in, dims(added, dim::in) - 1, 1);
 
   return multi_aff{
@@ -867,7 +867,7 @@ inline multi_aff flat_range_product(std::span<aff> affs) {
 }
 
 inline multi_aff append_zero(multi_aff ma) {
-  auto ins = domain(ma);
+  auto ins = domain_space(ma);
   auto zer = ins.zero<multi_aff>();
 
   return multi_aff{isl_multi_aff_flat_range_product(ma.yield(), zer.yield())};
